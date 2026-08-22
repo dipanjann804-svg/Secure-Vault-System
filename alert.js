@@ -6,7 +6,7 @@ function registerUser() {
   const newPassword = document.getElementById("newPassword").value;
 
   if (newId === "" || newPassword === "") {
-    alert("Please enter both ID and Password to register.");
+    alert("Please enter ID and Password to register.");
     return;
   }
 
@@ -19,12 +19,12 @@ function checkLogin() {
   const enteredPassword = document.getElementById("password").value;
 
   if (correctId === null || correctPassword === null) {
-    alert("No account registered yet. Please register first.");
+    alert("No account registered yet. Please register.");
     return;
   }
 
   if (enteredId === "" || enteredPassword === "") {
-    alert("Please enter both ID and Password.");
+    alert("Please enter ID and Password.");
     return;
   }
 
