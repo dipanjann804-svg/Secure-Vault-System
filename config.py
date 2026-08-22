@@ -1,8 +1,3 @@
-"""
-config.py
-Central configuration for the Secure Notes app.
-Loads secrets from environment variables (.env file)
-"""
 import os
 from dotenv import load_dotenv
 
