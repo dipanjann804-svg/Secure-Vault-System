@@ -1,10 +1,4 @@
-"""
-encryption.py
-Handles encryption/decryption of note content
-Uses Fernet from the `cryptography` library — authenticated symmetric
-encryption, so it also detects tampering, not just keeps content private.
-pip install cryptography python-dotenv
-"""
+
 from cryptography.fernet import Fernet
 from config import Config
 
