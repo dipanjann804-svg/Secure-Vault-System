@@ -1,9 +1,3 @@
-"""
-models.py
-Database models for the Secure Notes app.
-Note.content is stored ENCRYPTED (via encryption.py) — this file only
-defines structure and never encrypts/decrypts anything itself.
-"""
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
