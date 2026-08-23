@@ -52,8 +52,15 @@ def create_app():
 
 
     @app.route("/dashboard")
+    @login_required
     def dashboard():
         return render_template("dashboard.html")
+
+
+    @app.route("/test")
+    @login_required
+    def test():
+        return "TEST ROUTE"
 
     
     @app.route("/register", methods=["GET", "POST"])
@@ -85,6 +92,8 @@ def create_app():
                     user = User(username = username, email = email, password_hash = pw_hash)
                     db.session.add(user)
                     db.session.commit()
+
+                    flash("Account created successfully!", "success")
 
                     return redirect(url_for('login'))
 
