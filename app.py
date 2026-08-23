@@ -5,6 +5,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, cur
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import timedelta
 
 
 db = SQLAlchemy()
@@ -28,6 +29,7 @@ def create_app():
     app.config['SECRET_KEY'] = 'dev-secret-key'
     app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///app.db"
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['REMEMBER_COOKIE_DURATION'] = timedelta(days=15)
 
     db.init_app(app)
     login_manager.init_app(app)
@@ -129,9 +131,10 @@ def create_app():
                 errors.append("Invalid")
 
             else:
-                login_user(user)
-                return redirect(url_for("dashboard"))
+                remember_flag = request.form.get("remember") == "1"
 
+                login_user(user, remember=remember_flag)
+                return redirect(url_for("dashboard"))
         return render_template("login.html")
 
 
