@@ -1,7 +1,7 @@
 import re
-from flask import Flask, render_template, url_for, request, redirect
+from flask import Flask, render_template, url_for, request, redirect, flash
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, UserMixin, login_user
+from flask_login import LoginManager, UserMixin, login_user, login_required, current_user, logout_user 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -25,7 +25,6 @@ class User(UserMixin, db.Model):
 def create_app():
     app = Flask(__name__)
 
-
     app.config['SECRET_KEY'] = 'dev-secret-key'
     app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///app.db"
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -46,9 +45,11 @@ def create_app():
     with app.app_context():
         db.create_all()
 
+
     @app.route("/")
     def index():
         return render_template("index.html")
+
 
     @app.route("/dashboard")
     def dashboard():
@@ -122,9 +123,14 @@ def create_app():
                 login_user(user)
                 return redirect(url_for("dashboard"))
 
-
-
         return render_template("login.html")
+
+
+    @app.route("/logout")
+    def logout():
+        logout_user()
+        flash("You have been logged out", "success")
+        return redirect(url_for("index"))
 
 
     @login_manager.user_loader
@@ -132,6 +138,8 @@ def create_app():
         return User.query.get(int(user_id))
 
     return app
+
+
 
 if __name__ == "__main__":
     app = create_app()
