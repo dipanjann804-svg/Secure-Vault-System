@@ -33,7 +33,10 @@ ALLOWED_FOLDERS = ['Identity', 'Finance', 'Health', 'Legal', 'Property', 'Misc']
 
 
 def create_app():
-    app = Flask(__name__)
+    # Automatically locate templates whether uploaded inside templates/ or directly in root
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    tpl_dir = 'templates' if os.path.isdir(os.path.join(root_dir, 'templates')) else '.'
+    app = Flask(__name__, template_folder=tpl_dir)
 
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-vault-123')
     app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -55,7 +58,10 @@ def create_app():
     login_manager.login_view = "login"
 
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as e:
+            print(f"[!] Warning during db.create_all: {e}")
 
     @login_manager.user_loader
     def load_user(user_id):
