@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Flask Auth Lite{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+  {% block nav %}
+  <nav class="border-b border-slate-800 bg-slate-900/50">
+    <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+      <a href="/" class="font-semibold text-lg">Flask Auth Lite</a>
+      <div class="flex items-center gap-4 text-sm">
+        {% if session.get('user_id') %}
+          <a href="/dashboard" class="text-slate-300 hover:text-white">Dashboard</a>
+          <a href="/logout" class="text-slate-300 hover:text-white">Logout</a>
+        {% else %}
+          <a href="/login" class="text-slate-300 hover:text-white">Login</a>
+          <a href="/register" class="text-slate-300 hover:text-white">Register</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+  {% endblock %}
+
+  <main class="{% block main_class %}flex-1 max-w-4xl w-full mx-auto px-4 py-10{% endblock %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="mb-6 space-y-2">
+          {% for category, message in messages %}
+            <div class="rounded-xl border px-4 py-2 text-sm
+              {% if category == 'error' %}
+                border-red-800 bg-red-950/50 text-red-300
+              {% elif category == 'success' %}
+                border-emerald-800 bg-emerald-950/50 text-emerald-300
+              {% else %}
+                border-slate-700 bg-slate-800/50 text-slate-300
+              {% endif %}">
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block footer %}
+  <footer class="border-t border-slate-800 py-4">
+    <p class="text-center text-xs text-slate-500">Flask Auth Lite</p>
+  </footer>
+  {% endblock %}
+</body>
+</html>
