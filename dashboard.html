@@ -1,22 +1,1271 @@
 {% extends "base.html" %} {% block title %}Dashboard · Flask Auth Lite{% endblock %}
 {% block content %}
-<h1 class="text-3xl font-semibold mb-2">Dashboard</h1>
-<p class="text-slate-400 mb-6">
-  You're logged in as
-  <span class="text-slate-200 font-medium">{{ user.email if user else session.get('email', 'unknown') }}</span>.
-</p>
 
-<div class="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-  <h2 class="font-semibold mb-2">Account</h2>
-  <p class="text-sm text-slate-400">
-    This is a protected page — only visible to logged-in users.
-  </p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --purple:#5B3FE0;
+    --purple-dark:#4A31C4;
+    --purple-tint:#EFEAFF;
+    --blue-tint:#E7F0FF;
+    --green-tint:#EAF7EE;
+    --yellow-tint:#FFF6DA;
+    --yellow-border:#F4E4A6;
+    --ink:#16151F;
+    --muted:#6B7280;
+    --border:#E7E5F0;
+    --bg:#ffffff;
+    --surface:#ffffff;
+    --surface-soft:#F7F6FC;
+    --surface-soft-hover:#EFEDF6;
+  }
+  html[data-theme="dark"]{
+    --purple-tint:#2A2453;
+    --blue-tint:#1E2A3D;
+    --green-tint:#1C332A;
+    --yellow-tint:#3A331A;
+    --yellow-border:#5C4F26;
+    --ink:#EDEBFA;
+    --muted:#9C98B5;
+    --border:#2E2B45;
+    --bg:#131120;
+    --surface:#1B1830;
+    --surface-soft:#211E38;
+    --surface-soft-hover:#2A2645;
+  }
+  body{transition: background .2s ease, color .2s ease;}
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter', system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px;margin:0 auto; padding: 36px 24px 90px;}
+
+  /* Header */
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:20px;
+    flex-wrap:wrap;
+    margin-bottom:34px;
+  }
+  .title-block h1{
+    font-size:28px;
+    font-weight:800;
+    margin:0 0 4px;
+    letter-spacing:-0.02em;
+  }
+  .title-block h1 span{color:var(--purple);}
+  .title-block p{
+    margin:0;
+    color:var(--muted);
+    font-size:14.5px;
+  }
+
+  .search-bar{
+    position:relative;
+    min-width:300px;
+    flex:0 1 380px;
+  }
+  .search-bar input{
+    width:100%;
+    background:var(--surface-soft);
+    border:1px solid var(--border);
+    border-radius:999px;
+    padding:13px 18px 13px 44px;
+    font-family:inherit;
+    font-size:14px;
+    color:var(--ink);
+    outline:none;
+    transition:border-color .15s, background .15s;
+  }
+  .search-bar input:focus{border-color:var(--purple); background:var(--surface);}
+  .search-bar input::placeholder{color:#9CA3AF;}
+  .search-bar svg{
+    position:absolute; left:16px; top:50%;
+    transform:translateY(-50%);
+    width:17px; height:17px;
+    stroke:#9CA3AF;
+  }
+
+  /* Profile */
+  .profile{
+    position:relative;
+    flex-shrink:0;
+  }
+  .profile-btn{
+    width:44px; height:44px;
+    border-radius:50%;
+    background:var(--purple);
+    color:#fff;
+    border:none;
+    font-family:inherit;
+    font-weight:700;
+    font-size:15px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    transition: box-shadow .15s ease;
+  }
+  .profile-btn:hover{box-shadow:0 0 0 4px var(--purple-tint);}
+  .profile-menu{
+    position:absolute;
+    top:54px; right:0;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:14px;
+    box-shadow:0 10px 30px rgba(22,21,31,0.12);
+    min-width:190px;
+    padding:8px;
+    display:none;
+    z-index:10;
+  }
+  .profile-menu.open{display:block;}
+  .profile-menu .who{
+    padding:10px 12px 12px;
+    border-bottom:1px solid var(--border);
+    margin-bottom:6px;
+  }
+  .profile-menu .who .name{font-weight:700; font-size:13.5px; color:var(--ink);}
+  .profile-menu .who .email{font-size:12px; color:var(--muted); margin-top:2px;}
+  .profile-menu button{
+    width:100%;
+    text-align:left;
+    background:none;
+    border:none;
+    font-family:inherit;
+    font-size:13.5px;
+    color:var(--ink);
+    padding:9px 12px;
+    border-radius:8px;
+    cursor:pointer;
+  }
+  .profile-menu button:hover{background:var(--purple-tint); color:var(--purple);}
+
+  /* Profile modal */
+  .modal-overlay{
+    display:none;
+    position:fixed; inset:0;
+    background:rgba(22,21,31,0.45);
+    align-items:center; justify-content:center;
+    padding:20px;
+    z-index:100;
+  }
+  .modal-overlay.open{display:flex;}
+  .modal-card{
+    background:var(--surface);
+    border-radius:22px;
+    width:100%;
+    max-width:480px;
+    max-height:88vh;
+    overflow-y:auto;
+    padding:28px;
+    position:relative;
+  }
+  .modal-close{
+    position:absolute; top:18px; right:18px;
+    background:var(--surface-soft); border:none;
+    width:32px; height:32px; border-radius:50%;
+    font-size:15px; color:var(--muted);
+    cursor:pointer;
+  }
+  .modal-close:hover{background:var(--purple-tint); color:var(--purple);}
+  .modal-card h2{
+    font-size:20px; font-weight:800;
+    margin:0 0 22px;
+    letter-spacing:-0.01em;
+  }
+
+  .photo-row{
+    display:flex; align-items:center; gap:16px;
+    margin-bottom:24px;
+  }
+  .photo-preview{
+    width:76px; height:76px;
+    border-radius:50%;
+    background:var(--purple);
+    color:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-size:26px; font-weight:700;
+    overflow:hidden;
+    flex-shrink:0;
+  }
+  .photo-preview img{width:100%; height:100%; object-fit:cover;}
+  .photo-actions{display:flex; flex-direction:column; gap:8px;}
+  .photo-btn{
+    font-family:inherit; font-size:13px; font-weight:600;
+    padding:8px 16px;
+    background:var(--purple-tint); color:var(--purple);
+    border:none; border-radius:999px; cursor:pointer;
+    width:fit-content;
+  }
+  .photo-btn:hover{background:#E2DBFB;}
+  .photo-btn.remove{background:#FDEAEA; color:#D9433B;}
+  .photo-btn.remove:hover{background:#FBDCDC;}
+
+  .field-group{margin-bottom:16px;}
+  .field-group label{
+    display:block;
+    font-size:12.5px; font-weight:600;
+    color:var(--muted);
+    margin-bottom:6px;
+  }
+  .field-group input, .field-group select{
+    width:100%;
+    font-family:inherit;
+    font-size:14px;
+    color:var(--ink);
+    padding:11px 14px;
+    border:1px solid var(--border);
+    border-radius:12px;
+    background:var(--surface-soft);
+    outline:none;
+    transition:border-color .15s, background .15s;
+  }
+  .field-group input:focus, .field-group select:focus{
+    border-color:var(--purple); background:var(--surface);
+  }
+  .field-row{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+
+  .modal-actions{
+    display:flex; justify-content:flex-end; gap:10px;
+    margin-top:22px;
+  }
+  .btn-secondary{
+    font-family:inherit; font-size:13.5px; font-weight:600;
+    padding:11px 20px;
+    background:var(--surface-soft); color:var(--ink);
+    border:none; border-radius:999px; cursor:pointer;
+  }
+  .btn-secondary:hover{background:var(--surface-soft-hover);}
+  .save-toast{
+    font-size:12.5px; color:#16A34A; font-weight:600;
+    align-self:center; margin-right:auto;
+    display:none;
+  }
+  .save-toast.show{display:inline;}
+
+  /* Settings modal extras */
+  .settings-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 0;
+    border-bottom:1px solid var(--border);
+  }
+  .settings-row:last-child{border-bottom:none;}
+  .settings-row .label{font-size:14px; font-weight:600; color:var(--ink);}
+  .settings-row .desc{font-size:12.5px; color:var(--muted); margin-top:2px;}
+
+  .toggle-switch{
+    position:relative;
+    width:46px; height:26px;
+    flex-shrink:0;
+  }
+  .toggle-switch input{
+    opacity:0; width:0; height:0;
+    position:absolute;
+  }
+  .toggle-switch .track{
+    position:absolute; inset:0;
+    background:var(--border);
+    border-radius:999px;
+    cursor:pointer;
+    transition:background .2s ease;
+  }
+  .toggle-switch .track::before{
+    content:"";
+    position:absolute;
+    left:3px; top:3px;
+    width:20px; height:20px;
+    background:#fff;
+    border-radius:50%;
+    transition:transform .2s ease;
+    box-shadow:0 1px 3px rgba(0,0,0,0.2);
+  }
+  .toggle-switch input:checked + .track{background:var(--purple);}
+  .toggle-switch input:checked + .track::before{transform:translateX(20px);}
+
+  .settings-section-title{
+    font-size:12px; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.04em; color:var(--muted);
+    margin:22px 0 4px;
+  }
+  .danger-row{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:12px;
+    padding:14px 0;
+    border-bottom:1px solid var(--border);
+  }
+  .danger-row:last-child{border-bottom:none;}
+  .btn-danger{
+    font-family:inherit; font-size:13px; font-weight:600;
+    padding:9px 16px;
+    background:#FDEAEA; color:#D9433B;
+    border:none; border-radius:999px; cursor:pointer;
+    flex-shrink:0;
+  }
+  .btn-danger:hover{background:#FBDCDC;}
+  html[data-theme="dark"] .btn-danger{background:#3A1F20; color:#F17B75;}
+  html[data-theme="dark"] .btn-danger:hover{background:#472628;}
+
+  /* Section heading */
+  .section-heading{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    margin-bottom:16px;
+  }
+  .section-heading h2{
+    font-size:19px;
+    font-weight:800;
+    margin:0;
+    letter-spacing:-0.01em;
+  }
+  .section-heading .count-pill{
+    font-size:12.5px;
+    color:var(--purple);
+    background:var(--purple-tint);
+    padding:5px 12px;
+    border-radius:999px;
+    font-weight:600;
+  }
+  .heading-actions{display:flex; align-items:center; gap:8px;}
+  .select-toggle-btn, .select-cancel-btn{
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:6px 14px;
+    background:var(--surface-soft); color:var(--ink);
+    border:1px solid var(--border); border-radius:999px; cursor:pointer;
+  }
+  .select-toggle-btn:hover, .select-cancel-btn:hover{background:var(--surface-soft-hover);}
+  .select-toggle-btn.active{background:var(--purple); color:#fff; border-color:var(--purple);}
+  .delete-selected-btn{
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:6px 14px;
+    background:#FDEAEA; color:#D9433B;
+    border:none; border-radius:999px; cursor:pointer;
+  }
+  .delete-selected-btn:hover{background:#FBDCDC;}
+  html[data-theme="dark"] .delete-selected-btn{background:#3A1F20; color:#F17B75;}
+  html[data-theme="dark"] .delete-selected-btn:hover{background:#472628;}
+
+  .card.select-mode{cursor:pointer;}
+  .card .select-check{
+    display:none;
+    position:absolute; top:12px; left:12px;
+    width:20px; height:20px;
+    border-radius:6px;
+    border:2px solid var(--border);
+    background:var(--surface);
+    align-items:center; justify-content:center;
+    font-size:12px; color:#fff;
+    z-index:2;
+  }
+  .card.select-mode .select-check{display:flex;}
+  .card.select-mode .top-row{visibility:hidden;}
+  .card.selected{border-color:var(--purple); background:var(--purple-tint);}
+  .card.selected .select-check{background:var(--purple); border-color:var(--purple);}
+
+  .note-card.select-mode{cursor:pointer;}
+  .note-card .select-check{
+    display:none;
+    position:absolute; top:12px; left:12px;
+    width:20px; height:20px;
+    border-radius:6px;
+    border:2px solid var(--yellow-border);
+    background:var(--surface);
+    align-items:center; justify-content:center;
+    font-size:12px; color:#fff;
+    z-index:2;
+  }
+  .note-card.select-mode .select-check{display:flex;}
+  .note-card.select-mode .note-actions{visibility:hidden;}
+  .note-card.selected{border-color:var(--purple); background:var(--purple-tint);}
+  .note-card.selected .select-check{background:var(--purple); border-color:var(--purple);}
+
+  /* Folder cards */
+  .folders{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(200px,1fr));
+    gap:14px;
+    margin-bottom:34px;
+  }
+  .folder{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    padding:16px;
+    border-radius:16px;
+    border:1.5px solid transparent;
+    cursor:pointer;
+    transition:transform .15s ease, border-color .15s ease;
+    text-align:left;
+  }
+  .folder:hover{transform:translateY(-2px);}
+  .folder.active{border-color:var(--purple);}
+  .folder .icon-circle{
+    width:52px; height:52px;
+    border-radius:50%;
+    background:var(--surface);
+    display:flex; align-items:center; justify-content:center;
+    font-size:22px;
+    flex-shrink:0;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .folder .fname{
+    font-weight:700;
+    font-size:14.5px;
+    margin:0 0 3px;
+    color:var(--ink);
+  }
+  .folder .fcount{
+    font-size:12.5px;
+    color:var(--muted);
+    margin:0;
+  }
+  .folder.tint-purple{background:var(--purple-tint);}
+  .folder.tint-blue{background:var(--blue-tint);}
+  .folder.tint-green{background:var(--green-tint);}
+  .folder.tint-purple2{background:var(--purple-tint);}
+
+  .folder.all-folder{
+    background:var(--ink);
+  }
+  .folder.all-folder .icon-circle{background:rgba(255,255,255,0.12); }
+  .folder.all-folder .fname, .folder.all-folder .fcount{color:#fff;}
+  .folder.all-folder.active{border-color:var(--purple);}
+
+  /* Upload panel */
+  .upload-panel{
+    background:var(--surface-soft);
+    border:1.5px dashed var(--border);
+    border-radius:20px;
+    padding:26px;
+    text-align:center;
+    margin-bottom:36px;
+    transition: border-color .15s, background .15s;
+  }
+  .upload-panel.dragover{
+    border-color:var(--purple);
+    background:var(--purple-tint);
+  }
+  .upload-panel p{
+    margin:0 0 14px;
+    font-size:14px;
+    color:var(--muted);
+  }
+  .upload-panel strong{color:var(--ink);}
+  .upload-row{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;}
+  select#targetFolder{
+    font-family:inherit;
+    font-size:13.5px;
+    padding:11px 14px;
+    border:1px solid var(--border);
+    background:var(--surface);
+    border-radius:999px;
+    color:var(--ink);
+  }
+  .btn-primary{
+    font-family:inherit;
+    font-size:13.5px;
+    font-weight:600;
+    padding:11px 22px;
+    background:var(--purple);
+    color:#fff;
+    border:none;
+    border-radius:999px;
+    cursor:pointer;
+    transition: background .15s ease;
+  }
+  .btn-primary:hover{background:var(--purple-dark);}
+  input[type=file]{display:none;}
+
+  /* Document grid */
+  .doc-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(230px,1fr));
+    gap:14px;
+    min-height:80px;
+  }
+  .card{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:16px;
+    position:relative;
+    transition: box-shadow .15s ease, transform .15s ease;
+    animation: pop .18s ease;
+  }
+  .card:hover{box-shadow:0 6px 18px rgba(22,21,31,0.08); transform:translateY(-2px);}
+  @keyframes pop{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+  .card .top-row{display:flex; align-items:flex-start; justify-content:space-between; gap:8px;}
+  .card .icon-circle-sm{
+    width:38px; height:38px;
+    border-radius:50%;
+    background:var(--purple-tint);
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px;
+  }
+  .card .del{
+    background:none;border:none;cursor:pointer;
+    color:#B5B2C4; font-size:15px; line-height:1;
+    padding:4px 6px;
+    border-radius:50%;
+  }
+  .card .del:hover{color:#fff; background:#EF4444;}
+  .card .title{
+    font-weight:600; font-size:14px;
+    margin:12px 0 4px;
+    word-break:break-word;
+    color:var(--ink);
+  }
+  .card .meta{
+    font-size:12px;
+    color:var(--muted);
+    display:flex; justify-content:space-between;
+    border-top:1px solid var(--border);
+    padding-top:10px; margin-top:10px;
+  }
+  .card .folder-badge{
+    display:inline-block;
+    font-size:10.5px;
+    font-weight:600;
+    color:var(--purple);
+    background:var(--purple-tint);
+    padding:3px 9px;
+    border-radius:999px;
+    margin-bottom:2px;
+  }
+
+  .empty-state{
+    grid-column:1/-1;
+    text-align:center;
+    padding:60px 20px;
+    color:var(--muted);
+    font-size:14px;
+    background:var(--surface-soft);
+    border-radius:16px;
+    border:1px solid var(--border);
+  }
+  .empty-state .big{font-size:32px; display:block; margin-bottom:10px;}
+
+  /* Notepad */
+  .notepad-section{margin-top:44px;}
+  .notepad-composer{
+    background:var(--yellow-tint);
+    border:1.5px solid var(--yellow-border);
+    border-radius:20px;
+    padding:18px;
+    margin-bottom:18px;
+  }
+  .notepad-composer textarea{
+    width:100%;
+    min-height:70px;
+    resize:vertical;
+    border:none;
+    background:transparent;
+    font-family:inherit;
+    font-size:14.5px;
+    color:var(--ink);
+    outline:none;
+    line-height:1.5;
+  }
+  .notepad-composer textarea::placeholder{color:#A79A5C;}
+  .notepad-composer-row{
+    display:flex;
+    justify-content:flex-end;
+    margin-top:10px;
+  }
+  .notes-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
+    gap:14px;
+  }
+  .note-card{
+    background:var(--yellow-tint);
+    border:1px solid var(--yellow-border);
+    border-radius:16px;
+    padding:16px;
+    position:relative;
+    animation: pop .18s ease;
+  }
+  .note-card p.note-text{
+    font-size:13.5px;
+    line-height:1.5;
+    color:var(--ink);
+    margin:0 0 12px;
+    white-space:pre-wrap;
+    word-break:break-word;
+  }
+  .note-card .note-meta{
+    font-size:11.5px;
+    color:#8A7B3E;
+    display:flex; justify-content:space-between; align-items:center;
+    border-top:1px solid var(--yellow-border);
+    padding-top:8px;
+  }
+  .note-card .note-actions{
+    position:absolute; top:10px; right:10px;
+    display:flex; gap:4px;
+  }
+  .note-card .note-actions button{
+    background:none;border:none;cursor:pointer;
+    color:#B5A968; font-size:13px; line-height:1;
+    padding:5px 7px;
+    border-radius:50%;
+  }
+  .note-card .note-actions .download:hover{color:#fff; background:var(--purple);}
+  .note-card .note-actions .del:hover{color:#fff; background:#EF4444;}
+  .notes-empty{
+    grid-column:1/-1;
+    text-align:center;
+    padding:36px 20px;
+    color:#A79A5C;
+    font-size:13.5px;
+  }
+
+  @media (max-width:600px){
+    .title-block h1{font-size:23px;}
+    header{align-items:stretch;}
+    .search-bar{flex:1 1 auto;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="title-block">
+      <h1><span>Dashboard</span></h1>
+      <p><span id="docCount">0</span> documents saved across 6 folders</p>
+    </div>
+    <div class="search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input type="text" id="searchInput" placeholder="Search your documents…">
+    </div>
+    <div class="profile">
+      <button class="profile-btn" id="profileBtn">A</button>
+      <div class="profile-menu" id="profileMenu">
+        <div class="who">
+          <div class="name" id="menuName">Your Account</div>
+          <div class="email" id="menuEmail">you@example.com</div>
+        </div>
+        <button type="button" id="openProfileBtn">View profile</button>
+        <button type="button" id="openSettingsBtn">Settings</button>
+        <button type="button">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="section-heading"><h2>Folders</h2></div>
+  <div class="folders" id="folderRow"></div>
+
+  <div class="upload-panel" id="dropzone">
+    <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
+    <div class="upload-row">
+      <select id="targetFolder"></select>
+      <button class="btn-primary" id="browseBtn">Choose files</button>
+      <input type="file" id="fileInput" multiple>
+    </div>
+  </div>
+
+  <div class="section-heading">
+    <h2 id="gridLabel">All documents</h2>
+    <div class="heading-actions">
+      <span class="count-pill" id="gridCountPill">0 files</span>
+      <button type="button" class="select-toggle-btn" id="docSelectToggle">Select</button>
+      <button type="button" class="delete-selected-btn" id="docDeleteSelectedBtn" style="display:none;">Delete (0)</button>
+      <button type="button" class="select-cancel-btn" id="docSelectCancel" style="display:none;">Cancel</button>
+    </div>
+  </div>
+  <div class="doc-grid" id="docGrid"></div>
+
+  <div class="notepad-section">
+    <div class="section-heading">
+      <h2>Notepad</h2>
+      <div class="heading-actions">
+        <button type="button" class="select-toggle-btn" id="noteSelectToggle">Select</button>
+        <button type="button" class="delete-selected-btn" id="noteDeleteSelectedBtn" style="display:none;">Delete (0)</button>
+        <button type="button" class="select-cancel-btn" id="noteSelectCancel" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="notepad-composer">
+      <textarea id="noteInput" placeholder="Add a quick note…"></textarea>
+      <div class="notepad-composer-row">
+        <button class="btn-primary" id="saveNoteBtn">Save note</button>
+      </div>
+    </div>
+    <div class="notes-grid" id="notesGrid"></div>
+  </div>
+
 </div>
 
-<a
-  href="/logout"
-  class="inline-block mt-6 rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-sm hover:bg-slate-800/50"
->
-  Logout
-</a>
+<div class="modal-overlay" id="profileModal">
+  <div class="modal-card">
+    <button class="modal-close" id="closeProfileBtn">✕</button>
+    <h2>Edit Profile</h2>
+
+    <div class="photo-row">
+      <div class="photo-preview" id="photoPreview">A</div>
+      <div class="photo-actions">
+        <button type="button" class="photo-btn" id="uploadPhotoBtn">Upload photo</button>
+        <button type="button" class="photo-btn remove" id="removePhotoBtn">Remove</button>
+        <input type="file" id="photoInput" accept="image/*" style="display:none;">
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label for="profileName">Full name</label>
+      <input type="text" id="profileName" placeholder="Your name">
+    </div>
+
+    <div class="field-group">
+      <label for="profileEmail">Email</label>
+      <input type="email" id="profileEmail" placeholder="you@example.com">
+    </div>
+
+    <div class="field-group">
+      <label for="profilePhone">Phone number</label>
+      <input type="tel" id="profilePhone" placeholder="Phone number" autocomplete="off">
+    </div>
+
+    <div class="field-row">
+      <div class="field-group">
+        <label for="profileDob">Date of birth</label>
+        <input type="date" id="profileDob">
+      </div>
+      <div class="field-group">
+        <label for="profileGender">Gender</label>
+        <select id="profileGender">
+          <option value="">Select</option>
+          <option value="female">Female</option>
+          <option value="male">Male</option>
+          <option value="nonbinary">Non-binary</option>
+          <option value="prefer-not">Prefer not to say</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label for="profileLocation">Location</label>
+      <input type="text" id="profileLocation" placeholder="City, Country">
+    </div>
+
+    <div class="modal-actions">
+      <span class="save-toast" id="saveToast">Saved ✓</span>
+      <button type="button" class="btn-secondary" id="cancelProfileBtn">Cancel</button>
+      <button type="button" class="btn-primary" id="saveProfileBtn">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-card">
+    <button class="modal-close" id="closeSettingsBtn">✕</button>
+    <h2>Settings</h2>
+
+    <div class="settings-row">
+      <div>
+        <div class="label">Dark mode</div>
+        <div class="desc">Switch the whole dashboard between light and dark.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="darkModeToggle">
+        <span class="track"></span>
+      </label>
+    </div>
+
+    <div class="settings-section-title">Folders</div>
+    <div class="danger-row">
+      <div>
+        <div class="label">Select documents to delete</div>
+        <div class="desc">Choose specific files from any folder to remove.</div>
+      </div>
+      <button type="button" class="btn-danger" id="manageDocsBtn">Select</button>
+    </div>
+
+    <div class="settings-section-title">Notepad</div>
+    <div class="danger-row">
+      <div>
+        <div class="label">Select notes to delete</div>
+        <div class="desc">Choose specific notes to remove.</div>
+      </div>
+      <button type="button" class="btn-danger" id="manageNotesBtn">Select</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const FOLDERS = [
+    { id:'identity', name:'Identity',  icon:'🪪', tint:'tint-blue' },
+    { id:'finance',  name:'Finance',   icon:'💵', tint:'tint-green' },
+    { id:'health',   name:'Health',    icon:'🩺', tint:'tint-purple' },
+    { id:'legal',    name:'Legal',     icon:'⚖️', tint:'tint-purple2' },
+    { id:'property', name:'Property',  icon:'🏠', tint:'tint-blue' },
+    { id:'misc',     name:'Misc',      icon:'🗂️', tint:'tint-green' },
+  ];
+
+  // In-memory store only — nothing is written to disk or persisted between sessions.
+  let documents = []; // { id, name, size, type, folder, addedAt }
+  let activeFolder = 'all';
+  let searchTerm = '';
+
+  const folderRow = document.getElementById('folderRow');
+  const docGrid = document.getElementById('docGrid');
+  const targetFolder = document.getElementById('targetFolder');
+  const gridLabel = document.getElementById('gridLabel');
+  const gridCountPill = document.getElementById('gridCountPill');
+  const docCount = document.getElementById('docCount');
+
+  function fileIcon(type, name){
+    if(type.startsWith('image/')) return '🖼️';
+    if(type === 'application/pdf' || name.endsWith('.pdf')) return '📄';
+    if(type.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return '📝';
+    if(type.includes('sheet') || name.endsWith('.xls') || name.endsWith('.xlsx') || name.endsWith('.csv')) return '📊';
+    if(type.includes('zip')) return '🗜️';
+    return '📎';
+  }
+
+  function formatSize(bytes){
+    if(bytes < 1024) return bytes + ' B';
+    if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function renderFolders(){
+    folderRow.innerHTML = '';
+
+    const allTab = document.createElement('div');
+    allTab.className = 'folder all-folder' + (activeFolder === 'all' ? ' active' : '');
+    allTab.innerHTML = `
+      <span class="icon-circle">📚</span>
+      <div>
+        <p class="fname">All Documents</p>
+        <p class="fcount">${documents.length} filed</p>
+      </div>`;
+    allTab.onclick = () => { activeFolder = 'all'; renderAll(); };
+    folderRow.appendChild(allTab);
+
+    FOLDERS.forEach(f => {
+      const count = documents.filter(d => d.folder === f.id).length;
+      const el = document.createElement('div');
+      el.className = 'folder ' + f.tint + (activeFolder === f.id ? ' active' : '');
+      el.innerHTML = `
+        <span class="icon-circle">${f.icon}</span>
+        <div>
+          <p class="fname">${f.name}</p>
+          <p class="fcount">${count} filed</p>
+        </div>`;
+      el.onclick = () => { activeFolder = f.id; renderAll(); };
+      folderRow.appendChild(el);
+    });
+  }
+
+  function populateSelect(){
+    targetFolder.innerHTML = FOLDERS.map(f => `<option value="${f.id}">${f.icon} ${f.name}</option>`).join('');
+  }
+
+  let docSelectMode = false;
+  let selectedDocIds = new Set();
+
+  function renderGrid(){
+    let list = documents;
+    if(activeFolder !== 'all') list = list.filter(d => d.folder === activeFolder);
+    if(searchTerm.trim()){
+      const q = searchTerm.trim().toLowerCase();
+      list = list.filter(d => d.name.toLowerCase().includes(q));
+    }
+
+    const label = activeFolder === 'all' ? 'All documents' : FOLDERS.find(f=>f.id===activeFolder).name;
+    gridLabel.textContent = searchTerm.trim() ? `Results for "${searchTerm}"` : label;
+    gridCountPill.textContent = list.length + (list.length === 1 ? ' file' : ' files');
+
+    docGrid.innerHTML = '';
+    if(list.length === 0){
+      docGrid.innerHTML = `<div class="empty-state"><span class="big">🗂️</span>Nothing here yet.</div>`;
+      return;
+    }
+
+    list.slice().reverse().forEach(doc => {
+      const folderMeta = FOLDERS.find(f => f.id === doc.folder);
+      const card = document.createElement('div');
+      const isSelected = selectedDocIds.has(doc.id);
+      card.className = 'card' + (docSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
+      card.innerHTML = `
+        <span class="select-check">${isSelected ? '✓' : ''}</span>
+        <div class="top-row">
+          <span class="icon-circle-sm">${fileIcon(doc.type, doc.name)}</span>
+          <button class="del" title="Remove">✕</button>
+        </div>
+        <span class="folder-badge">${folderMeta.name}</span>
+        <div class="title">${doc.name}</div>
+        <div class="meta"><span>${formatSize(doc.size)}</span><span>${doc.addedAt}</span></div>
+      `;
+      card.querySelector('.del').onclick = () => {
+        documents = documents.filter(d => d.id !== doc.id);
+        renderAll();
+      };
+      card.addEventListener('click', e => {
+        if(!docSelectMode) return;
+        if(selectedDocIds.has(doc.id)) selectedDocIds.delete(doc.id);
+        else selectedDocIds.add(doc.id);
+        renderGrid();
+        updateDocSelectionUI();
+      });
+      docGrid.appendChild(card);
+    });
+  }
+
+  function updateDocSelectionUI(){
+    docDeleteSelectedBtn.textContent = `Delete (${selectedDocIds.size})`;
+  }
+
+  function renderAll(){
+    docCount.textContent = documents.length;
+    renderFolders();
+    renderGrid();
+  }
+
+  function addFiles(fileList){
+    const folder = targetFolder.value;
+    const now = new Date();
+    const stamp = now.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+    Array.from(fileList).forEach(file => {
+      documents.push({
+        id: crypto.randomUUID(),
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        folder,
+        addedAt: stamp
+      });
+    });
+    renderAll();
+  }
+
+  // Wiring
+  document.getElementById('browseBtn').onclick = () => document.getElementById('fileInput').click();
+  document.getElementById('fileInput').onchange = e => { addFiles(e.target.files); e.target.value=''; };
+
+  const dz = document.getElementById('dropzone');
+  ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove('dragover'); }));
+  dz.addEventListener('drop', e => { if(e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+  document.getElementById('searchInput').addEventListener('input', e => {
+    searchTerm = e.target.value;
+    renderGrid();
+  });
+
+  const docSelectToggle = document.getElementById('docSelectToggle');
+  const docDeleteSelectedBtn = document.getElementById('docDeleteSelectedBtn');
+  const docSelectCancel = document.getElementById('docSelectCancel');
+
+  function exitDocSelectMode(){
+    docSelectMode = false;
+    selectedDocIds.clear();
+    docSelectToggle.classList.remove('active');
+    docSelectToggle.textContent = 'Select';
+    docDeleteSelectedBtn.style.display = 'none';
+    docSelectCancel.style.display = 'none';
+    renderGrid();
+  }
+
+  docSelectToggle.addEventListener('click', () => {
+    docSelectMode = !docSelectMode;
+    if(docSelectMode){
+      docSelectToggle.classList.add('active');
+      docSelectToggle.textContent = 'Selecting…';
+      docDeleteSelectedBtn.style.display = 'inline-block';
+      docSelectCancel.style.display = 'inline-block';
+      updateDocSelectionUI();
+    } else {
+      exitDocSelectMode();
+    }
+    renderGrid();
+  });
+
+  docSelectCancel.addEventListener('click', exitDocSelectMode);
+
+  docDeleteSelectedBtn.addEventListener('click', () => {
+    if(selectedDocIds.size === 0) return;
+    documents = documents.filter(d => !selectedDocIds.has(d.id));
+    exitDocSelectMode();
+    renderAll();
+  });
+
+  populateSelect();
+  renderAll();
+
+  // Notepad
+  let notes = []; // { id, text, addedAt }
+  const notesGrid = document.getElementById('notesGrid');
+  const noteInput = document.getElementById('noteInput');
+  let noteSelectMode = false;
+  let selectedNoteIds = new Set();
+
+  function renderNotes(){
+    notesGrid.innerHTML = '';
+    if(notes.length === 0){
+      notesGrid.innerHTML = `<div class="notes-empty">No notes yet.</div>`;
+      return;
+    }
+    notes.slice().reverse().forEach(note => {
+      const card = document.createElement('div');
+      const isSelected = selectedNoteIds.has(note.id);
+      card.className = 'note-card' + (noteSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
+      card.innerHTML = `
+        <span class="select-check">${isSelected ? '✓' : ''}</span>
+        <div class="note-actions">
+          <button class="download" title="Download note">⬇</button>
+          <button class="del" title="Delete note">✕</button>
+        </div>
+        <p class="note-text"></p>
+        <div class="note-meta"><span>${note.addedAt}</span></div>
+      `;
+      card.querySelector('.note-text').textContent = note.text;
+      card.querySelector('.download').onclick = () => {
+        const blob = new Blob([note.text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `note-${note.addedAt.replace(/\s|,/g,'-')}-${note.id.slice(0,6)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      };
+      card.querySelector('.del').onclick = () => {
+        notes = notes.filter(n => n.id !== note.id);
+        renderNotes();
+      };
+      card.addEventListener('click', e => {
+        if(!noteSelectMode) return;
+        if(selectedNoteIds.has(note.id)) selectedNoteIds.delete(note.id);
+        else selectedNoteIds.add(note.id);
+        renderNotes();
+        updateNoteSelectionUI();
+      });
+      notesGrid.appendChild(card);
+    });
+  }
+
+  function updateNoteSelectionUI(){
+    noteDeleteSelectedBtn.textContent = `Delete (${selectedNoteIds.size})`;
+  }
+
+  function saveNote(){
+    const text = noteInput.value.trim();
+    if(!text) return;
+    const stamp = new Date().toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+    notes.push({ id: crypto.randomUUID(), text, addedAt: stamp });
+    noteInput.value = '';
+    renderNotes();
+  }
+
+  document.getElementById('saveNoteBtn').onclick = saveNote;
+  noteInput.addEventListener('keydown', e => {
+    if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote();
+  });
+
+  const noteSelectToggle = document.getElementById('noteSelectToggle');
+  const noteDeleteSelectedBtn = document.getElementById('noteDeleteSelectedBtn');
+  const noteSelectCancel = document.getElementById('noteSelectCancel');
+
+  function exitNoteSelectMode(){
+    noteSelectMode = false;
+    selectedNoteIds.clear();
+    noteSelectToggle.classList.remove('active');
+    noteSelectToggle.textContent = 'Select';
+    noteDeleteSelectedBtn.style.display = 'none';
+    noteSelectCancel.style.display = 'none';
+    renderNotes();
+  }
+
+  noteSelectToggle.addEventListener('click', () => {
+    noteSelectMode = !noteSelectMode;
+    if(noteSelectMode){
+      noteSelectToggle.classList.add('active');
+      noteSelectToggle.textContent = 'Selecting…';
+      noteDeleteSelectedBtn.style.display = 'inline-block';
+      noteSelectCancel.style.display = 'inline-block';
+      updateNoteSelectionUI();
+    } else {
+      exitNoteSelectMode();
+    }
+    renderNotes();
+  });
+
+  noteSelectCancel.addEventListener('click', exitNoteSelectMode);
+
+  noteDeleteSelectedBtn.addEventListener('click', () => {
+    if(selectedNoteIds.size === 0) return;
+    notes = notes.filter(n => !selectedNoteIds.has(n.id));
+    exitNoteSelectMode();
+  });
+
+  renderNotes();
+
+  // Profile menu
+  const profileBtn = document.getElementById('profileBtn');
+  const profileMenu = document.getElementById('profileMenu');
+  profileBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    profileMenu.classList.toggle('open');
+  });
+  document.addEventListener('click', e => {
+    if(!profileMenu.contains(e.target) && e.target !== profileBtn){
+      profileMenu.classList.remove('open');
+    }
+  });
+
+  // Profile modal
+  let profile = {
+    name:'', email:'', phone:'', dob:'', gender:'', location:'', photo:null
+  };
+
+  const profileModal = document.getElementById('profileModal');
+  const openProfileBtn = document.getElementById('openProfileBtn');
+  const closeProfileBtn = document.getElementById('closeProfileBtn');
+  const cancelProfileBtn = document.getElementById('cancelProfileBtn');
+  const saveProfileBtn = document.getElementById('saveProfileBtn');
+  const saveToast = document.getElementById('saveToast');
+  const photoPreview = document.getElementById('photoPreview');
+  const photoInput = document.getElementById('photoInput');
+  const uploadPhotoBtn = document.getElementById('uploadPhotoBtn');
+  const removePhotoBtn = document.getElementById('removePhotoBtn');
+  const menuName = document.getElementById('menuName');
+  const menuEmail = document.getElementById('menuEmail');
+
+  const nameField = document.getElementById('profileName');
+  const emailField = document.getElementById('profileEmail');
+  const phoneField = document.getElementById('profilePhone');
+  const dobField = document.getElementById('profileDob');
+  const genderField = document.getElementById('profileGender');
+  const locationField = document.getElementById('profileLocation');
+
+  function getInitial(){
+    return profile.name.trim() ? profile.name.trim()[0].toUpperCase() : 'A';
+  }
+
+  function openProfileModal(){
+    profileMenu.classList.remove('open');
+    nameField.value = profile.name;
+    emailField.value = profile.email;
+    phoneField.value = profile.phone;
+    dobField.value = profile.dob;
+    genderField.value = profile.gender;
+    locationField.value = profile.location;
+    updatePhotoPreview();
+    saveToast.classList.remove('show');
+    profileModal.classList.add('open');
+  }
+
+  function closeProfileModal(){
+    profileModal.classList.remove('open');
+  }
+
+  function updateMenuDisplay(){
+    menuName.textContent = profile.name.trim() || 'Your Account';
+    menuEmail.textContent = profile.email.trim() || 'you@example.com';
+  }
+
+  function updatePhotoPreview(){
+    const initial = getInitial();
+    if(profile.photo){
+      photoPreview.innerHTML = `<img src="${profile.photo}" alt="Profile photo">`;
+      profileBtn.innerHTML = `<img src="${profile.photo}" alt="Profile photo" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+    } else {
+      photoPreview.innerHTML = initial;
+      profileBtn.innerHTML = initial;
+    }
+    updateMenuDisplay();
+  }
+
+  openProfileBtn.addEventListener('click', openProfileModal);
+  closeProfileBtn.addEventListener('click', closeProfileModal);
+  cancelProfileBtn.addEventListener('click', closeProfileModal);
+  profileModal.addEventListener('click', e => { if(e.target === profileModal) closeProfileModal(); });
+
+  uploadPhotoBtn.addEventListener('click', () => photoInput.click());
+  photoInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      profile.photo = ev.target.result;
+      updatePhotoPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+  removePhotoBtn.addEventListener('click', () => {
+    profile.photo = null;
+    photoInput.value = '';
+    updatePhotoPreview();
+  });
+
+  saveProfileBtn.addEventListener('click', () => {
+    profile.name = nameField.value.trim();
+    profile.email = emailField.value.trim();
+    profile.phone = phoneField.value.trim();
+    profile.dob = dobField.value;
+    profile.gender = genderField.value;
+    profile.location = locationField.value.trim();
+    updatePhotoPreview();
+    saveToast.classList.add('show');
+    setTimeout(() => closeProfileModal(), 700);
+  });
+
+  // Settings modal
+  const settingsModal = document.getElementById('settingsModal');
+  const openSettingsBtn = document.getElementById('openSettingsBtn');
+  const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+  const darkModeToggle = document.getElementById('darkModeToggle');
+  const manageDocsBtn = document.getElementById('manageDocsBtn');
+  const manageNotesBtn = document.getElementById('manageNotesBtn');
+
+  function openSettingsModal(){
+    profileMenu.classList.remove('open');
+    settingsModal.classList.add('open');
+  }
+  function closeSettingsModal(){
+    settingsModal.classList.remove('open');
+  }
+  openSettingsBtn.addEventListener('click', openSettingsModal);
+  closeSettingsBtn.addEventListener('click', closeSettingsModal);
+  settingsModal.addEventListener('click', e => { if(e.target === settingsModal) closeSettingsModal(); });
+
+  // Dark mode
+  darkModeToggle.addEventListener('change', () => {
+    if(darkModeToggle.checked){
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  });
+
+  // Jump to document selection mode from settings
+  manageDocsBtn.addEventListener('click', () => {
+    closeSettingsModal();
+    if(!docSelectMode) docSelectToggle.click();
+    document.getElementById('gridLabel').scrollIntoView({ behavior:'smooth', block:'center' });
+  });
+
+  // Jump to note selection mode from settings
+  manageNotesBtn.addEventListener('click', () => {
+    closeSettingsModal();
+    if(!noteSelectMode) noteSelectToggle.click();
+    notesGrid.scrollIntoView({ behavior:'smooth', block:'center' });
+  });
+</script>
+</body>
+</html>
 {% endblock %}
