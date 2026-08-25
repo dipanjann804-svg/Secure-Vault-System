@@ -1,7 +1,8 @@
+import random
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from flask import Flask, render_template, url_for, request, redirect, flash
+from flask import Flask, render_template, url_for, request, redirect, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, current_user, logout_user
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -15,6 +16,9 @@ login_manager = LoginManager()
 
 RESET_SALT = "password-reset-salt"
 RESET_MAX_AGE = 3600  # seconds (1 hour)
+
+CHANGE_PW_OTP_SESSION_KEY = "change_password_otp"
+CHANGE_PW_OTP_MAX_AGE = 600  # seconds (10 minutes)
 
 
 class User(UserMixin, db.Model):
@@ -40,6 +44,20 @@ def create_app():
     login_manager.login_view = "login"
 
     serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+    def _issue_change_password_otp():
+        """Generate a 6-digit code, stash it in the session, and 'send' it.
+
+        No email provider is wired up yet, so the code is printed to the
+        console for testing. Swap this for a real send (Flask-Mail,
+        SendGrid, SES, etc.) before going to production.
+        """
+        code = f"{random.randint(0, 999999):06d}"
+        session[CHANGE_PW_OTP_SESSION_KEY] = {
+            "code": code,
+            "expires_at": (datetime.utcnow() + timedelta(seconds=CHANGE_PW_OTP_MAX_AGE)).timestamp(),
+        }
+        print(f"[DEV] Password change verification code for {current_user.email}: {code}")
 
     @app.route("/health/db")
     def health_db():
@@ -196,6 +214,49 @@ def create_app():
 
         return render_template("reset_password.html", errors=errors, token=token)
 
+    @app.route("/change-password", methods=["GET", "POST"])
+    @login_required
+    def change_password():
+        errors = []
+
+        if request.method == "GET":
+            # Fresh visit to the page: issue a new code straight away.
+            _issue_change_password_otp()
+
+        if request.method == "POST":
+            otp = (request.form.get("otp") or "").strip()
+            new_password = request.form.get("new_password") or ""
+            confirm_password = request.form.get("confirm_password") or ""
+
+            stored = session.get(CHANGE_PW_OTP_SESSION_KEY)
+
+            if not stored or stored.get("expires_at", 0) < datetime.utcnow().timestamp():
+                errors.append("Your code has expired. Request a new one below.")
+            elif otp != stored.get("code"):
+                errors.append("That code is incorrect.")
+
+            if len(new_password) < 6:
+                errors.append("Password needs to be at least 6 characters")
+
+            if new_password != confirm_password:
+                errors.append("Passwords don't match")
+
+            if not errors:
+                current_user.password_hash = generate_password_hash(new_password)
+                db.session.commit()
+                session.pop(CHANGE_PW_OTP_SESSION_KEY, None)
+
+                flash("Your password has been updated.", "success")
+                return redirect(url_for("dashboard"))
+
+        return render_template("change_password.html", errors=errors)
+
+    @app.route("/change-password/resend-code", methods=["POST"])
+    @login_required
+    def resend_change_password_code():
+        _issue_change_password_otp()
+        return {"status": "sent"}, 200
+
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))
@@ -206,3 +267,4 @@ def create_app():
 if __name__ == "__main__":
     app = create_app()
     app.run(debug=True, port=5555)
+    
