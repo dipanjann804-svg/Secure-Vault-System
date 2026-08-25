@@ -1,6 +1,3 @@
-{% extends "base.html" %} {% block title %}Dashboard · Flask Auth Lite{% endblock %}
-{% block content %}
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,6 +8,38 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root{
+    --purple:#6366f1;
+    --purple-dark:#4f46e5;
+    --purple-tint:#333340;
+    --blue-tint:#283240;
+    --green-tint:#22352c;
+    --yellow-tint:#383424;
+    --yellow-border:#564e30;
+    --ink:#f3f4f6;
+    --muted:#9ca3af;
+    --border:#3a3a46;
+    --bg:#202025;
+    --surface:#282830;
+    --surface-soft:#303038;
+    --surface-soft-hover:#383842;
+  }
+  html[data-theme="dark"]{
+    --purple:#818cf8;
+    --purple-dark:#6366f1;
+    --purple-tint:#333340;
+    --blue-tint:#283240;
+    --green-tint:#22352c;
+    --yellow-tint:#383424;
+    --yellow-border:#564e30;
+    --ink:#f3f4f6;
+    --muted:#9ca3af;
+    --border:#3a3a46;
+    --bg:#202025;
+    --surface:#282830;
+    --surface-soft:#303038;
+    --surface-soft-hover:#383842;
+  }
+  html[data-theme="light"]{
     --purple:#5B3FE0;
     --purple-dark:#4A31C4;
     --purple-tint:#EFEAFF;
@@ -25,20 +54,6 @@
     --surface:#ffffff;
     --surface-soft:#F7F6FC;
     --surface-soft-hover:#EFEDF6;
-  }
-  html[data-theme="dark"]{
-    --purple-tint:#2A2453;
-    --blue-tint:#1E2A3D;
-    --green-tint:#1C332A;
-    --yellow-tint:#3A331A;
-    --yellow-border:#5C4F26;
-    --ink:#EDEBFA;
-    --muted:#9C98B5;
-    --border:#2E2B45;
-    --bg:#131120;
-    --surface:#1B1830;
-    --surface-soft:#211E38;
-    --surface-soft-hover:#2A2645;
   }
   body{transition: background .2s ease, color .2s ease;}
   *{box-sizing:border-box;}
@@ -437,11 +452,23 @@
   .folder.tint-purple2{background:var(--purple-tint);}
 
   .folder.all-folder{
-    background:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
   }
-  .folder.all-folder .icon-circle{background:rgba(255,255,255,0.12); }
-  .folder.all-folder .fname, .folder.all-folder .fcount{color:#fff;}
-  .folder.all-folder.active{border-color:var(--purple);}
+  .folder.all-folder:hover{
+    background:var(--surface-soft-hover);
+  }
+  .folder.all-folder .icon-circle{
+    background:var(--surface);
+    border:1px solid var(--border);
+  }
+  .folder.all-folder .fname{color:var(--ink);}
+  .folder.all-folder .fcount{color:var(--muted);}
+  .folder.all-folder.active{
+    border-color:var(--purple);
+    background:var(--purple-tint);
+  }
+  .folder.all-folder.active .fname{color:var(--ink);}
 
   /* Upload panel */
   .upload-panel{
@@ -632,15 +659,76 @@
     font-size:13.5px;
   }
 
+  /* Flash alerts */
+  .flash-container{margin-bottom: 24px;}
+  .flash-alert{
+    padding: 13px 18px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    animation: pop .18s ease;
+  }
+  .flash-success{background:#EAF7EE; color:#15803D; border:1px solid #B8E6C4;}
+  .flash-error{background:#FDEAEA; color:#D9433B; border:1px solid #FBDCDC;}
+  html[data-theme="dark"] .flash-success{background:#183321; color:#4ADE80; border-color:#225433;}
+  html[data-theme="dark"] .flash-error{background:#3A1F20; color:#F87171; border-color:#572326;}
+
+  .card .card-actions{display:flex; align-items:center; gap:4px;}
+  .card .card-btn{
+    background:none;border:none;cursor:pointer;
+    color:var(--muted); font-size:14px; line-height:1;
+    padding:6px 8px;
+    border-radius:50%;
+    text-decoration:none;
+    display:inline-flex; align-items:center; justify-content:center;
+  }
+  .card .card-btn:hover{color:var(--purple); background:var(--purple-tint);}
+  .card .card-btn.del:hover{color:#fff; background:#EF4444;}
+  .profile-menu a.menu-item{
+    width:100%;
+    text-align:left;
+    background:none;
+    border:none;
+    font-family:inherit;
+    font-size:13.5px;
+    color:var(--ink);
+    padding:9px 12px;
+    border-radius:8px;
+    cursor:pointer;
+    display:block;
+    text-decoration:none;
+    box-sizing:border-box;
+  }
+  .profile-menu a.menu-item:hover{background:var(--purple-tint); color:var(--purple);}
+  .profile-menu a.menu-item.logout-item:hover{background:#FDEAEA; color:#D9433B;}
+
   @media (max-width:600px){
     .title-block h1{font-size:23px;}
     header{align-items:stretch;}
     .search-bar{flex:1 1 auto;}
+    .field-row{grid-template-columns:1fr;}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-container">
+        {% for category, message in messages %}
+          <div class="flash-alert flash-{{ category }}">
+            <span>{{ message }}</span>
+            <span style="cursor:pointer; font-size:16px; margin-left:12px;" onclick="this.parentElement.remove()">✕</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
 
   <header>
     <div class="title-block">
@@ -655,12 +743,13 @@
       <button class="profile-btn" id="profileBtn">A</button>
       <div class="profile-menu" id="profileMenu">
         <div class="who">
-          <div class="name" id="menuName">Your Account</div>
-          <div class="email" id="menuEmail">you@example.com</div>
+          <div class="name" id="menuName">{{ user.name or user.username or 'Your Account' if user else 'Your Account' }}</div>
+          <div class="email" id="menuEmail">{{ user.email if user else 'you@example.com' }}</div>
         </div>
         <button type="button" id="openProfileBtn">View profile</button>
         <button type="button" id="openSettingsBtn">Settings</button>
-        <button type="button">Log out</button>
+        <a href="/change-password" class="menu-item">Change password</a>
+        <a href="/logout" class="menu-item logout-item">Log out</a>
       </div>
     </div>
   </header>
@@ -668,13 +757,14 @@
   <div class="section-heading"><h2>Folders</h2></div>
   <div class="folders" id="folderRow"></div>
 
+  <!-- Document upload form / dropzone connected with backend database -->
   <div class="upload-panel" id="dropzone">
     <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
-    <div class="upload-row">
-      <select id="targetFolder"></select>
-      <button class="btn-primary" id="browseBtn">Choose files</button>
-      <input type="file" id="fileInput" multiple>
-    </div>
+    <form id="uploadForm" action="/documents/upload" method="POST" enctype="multipart/form-data" class="upload-row">
+      <select id="targetFolder" name="folder"></select>
+      <button type="button" class="btn-primary" id="browseBtn">Choose files</button>
+      <input type="file" id="fileInput" name="files" multiple>
+    </form>
   </div>
 
   <div class="section-heading">
@@ -698,7 +788,7 @@
       </div>
     </div>
     <div class="notepad-composer">
-      <textarea id="noteInput" placeholder="Add a quick note…"></textarea>
+      <textarea id="noteInput" placeholder="Add a quick note… (Encrypted securely in database)"></textarea>
       <div class="notepad-composer-row">
         <button class="btn-primary" id="saveNoteBtn">Save note</button>
       </div>
@@ -708,65 +798,69 @@
 
 </div>
 
+<!-- Profile Modal -->
 <div class="modal-overlay" id="profileModal">
   <div class="modal-card">
     <button class="modal-close" id="closeProfileBtn">✕</button>
     <h2>Edit Profile</h2>
 
-    <div class="photo-row">
-      <div class="photo-preview" id="photoPreview">A</div>
-      <div class="photo-actions">
-        <button type="button" class="photo-btn" id="uploadPhotoBtn">Upload photo</button>
-        <button type="button" class="photo-btn remove" id="removePhotoBtn">Remove</button>
-        <input type="file" id="photoInput" accept="image/*" style="display:none;">
+    <form id="profileForm">
+      <div class="photo-row">
+        <div class="photo-preview" id="photoPreview">A</div>
+        <div class="photo-actions">
+          <button type="button" class="photo-btn" id="uploadPhotoBtn">Upload photo</button>
+          <button type="button" class="photo-btn remove" id="removePhotoBtn">Remove</button>
+          <input type="file" id="photoInput" name="avatar_file" accept="image/*" style="display:none;">
+        </div>
       </div>
-    </div>
 
-    <div class="field-group">
-      <label for="profileName">Full name</label>
-      <input type="text" id="profileName" placeholder="Your name">
-    </div>
-
-    <div class="field-group">
-      <label for="profileEmail">Email</label>
-      <input type="email" id="profileEmail" placeholder="you@example.com">
-    </div>
-
-    <div class="field-group">
-      <label for="profilePhone">Phone number</label>
-      <input type="tel" id="profilePhone" placeholder="Phone number" autocomplete="off">
-    </div>
-
-    <div class="field-row">
       <div class="field-group">
-        <label for="profileDob">Date of birth</label>
-        <input type="date" id="profileDob">
+        <label for="profileName">Full name</label>
+        <input type="text" id="profileName" name="name" placeholder="Your name" value="{{ user.name or '' if user else '' }}">
       </div>
+
       <div class="field-group">
-        <label for="profileGender">Gender</label>
-        <select id="profileGender">
-          <option value="">Select</option>
-          <option value="female">Female</option>
-          <option value="male">Male</option>
-          <option value="nonbinary">Non-binary</option>
-          <option value="prefer-not">Prefer not to say</option>
-        </select>
+        <label for="profileEmail">Email</label>
+        <input type="email" id="profileEmail" placeholder="you@example.com" value="{{ user.email or '' if user else '' }}" disabled style="opacity:0.75; cursor:not-allowed;">
       </div>
-    </div>
 
-    <div class="field-group">
-      <label for="profileLocation">Location</label>
-      <input type="text" id="profileLocation" placeholder="City, Country">
-    </div>
+      <div class="field-group">
+        <label for="profilePhone">Phone number</label>
+        <input type="tel" id="profilePhone" name="phone" placeholder="Phone number" autocomplete="off" value="{{ user.phone or '' if user else '' }}">
+      </div>
 
-    <div class="modal-actions">
-      <span class="save-toast" id="saveToast">Saved ✓</span>
-      <button type="button" class="btn-secondary" id="cancelProfileBtn">Cancel</button>
-      <button type="button" class="btn-primary" id="saveProfileBtn">Save changes</button>
-    </div>
+      <div class="field-row">
+        <div class="field-group">
+          <label for="profileDob">Date of birth</label>
+          <input type="date" id="profileDob" name="date_of_birth" value="{{ user.date_of_birth or '' if user else '' }}">
+        </div>
+        <div class="field-group">
+          <label for="profileGender">Gender</label>
+          <select id="profileGender" name="gender">
+            <option value="">Select</option>
+            <option value="female" {% if user and user.gender == 'female' %}selected{% endif %}>Female</option>
+            <option value="male" {% if user and user.gender == 'male' %}selected{% endif %}>Male</option>
+            <option value="nonbinary" {% if user and user.gender == 'nonbinary' %}selected{% endif %}>Non-binary</option>
+            <option value="prefer-not" {% if user and user.gender == 'prefer-not' %}selected{% endif %}>Prefer not to say</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="profileLocation">Location</label>
+        <input type="text" id="profileLocation" name="location" placeholder="City, Country" value="{{ user.location or '' if user else '' }}">
+      </div>
+
+      <div class="modal-actions">
+        <span class="save-toast" id="saveToast">Saved ✓</span>
+        <button type="button" class="btn-secondary" id="cancelProfileBtn">Cancel</button>
+        <button type="button" class="btn-primary" id="saveProfileBtn">Save changes</button>
+      </div>
+    </form>
   </div>
 </div>
 
+<!-- Settings Modal -->
 <div class="modal-overlay" id="settingsModal">
   <div class="modal-card">
     <button class="modal-close" id="closeSettingsBtn">✕</button>
@@ -800,21 +894,46 @@
       </div>
       <button type="button" class="btn-danger" id="manageNotesBtn">Select</button>
     </div>
+
+    <div class="settings-section-title">Security</div>
+    <div class="danger-row" style="border-color:var(--border);">
+      <div>
+        <div class="label">Change Password</div>
+        <div class="desc">Update your account password securely.</div>
+      </div>
+      <a href="/change-password" class="btn-primary" style="text-decoration:none; padding:8px 16px; font-size:13px;">Change</a>
+    </div>
   </div>
 </div>
 
 <script>
+  // Folder definitions matching backend ALLOWED_FOLDERS
   const FOLDERS = [
-    { id:'identity', name:'Identity',  icon:'🪪', tint:'tint-blue' },
-    { id:'finance',  name:'Finance',   icon:'💵', tint:'tint-green' },
-    { id:'health',   name:'Health',    icon:'🩺', tint:'tint-purple' },
-    { id:'legal',    name:'Legal',     icon:'⚖️', tint:'tint-purple2' },
-    { id:'property', name:'Property',  icon:'🏠', tint:'tint-blue' },
-    { id:'misc',     name:'Misc',      icon:'🗂️', tint:'tint-green' },
+    { id:'Identity', name:'Identity', icon:'🪪', tint:'tint-blue' },
+    { id:'Finance',  name:'Finance',  icon:'💵', tint:'tint-green' },
+    { id:'Health',   name:'Health',   icon:'🩺', tint:'tint-purple' },
+    { id:'Legal',    name:'Legal',    icon:'⚖️', tint:'tint-purple2' },
+    { id:'Property', name:'Property', icon:'🏠', tint:'tint-blue' },
+    { id:'Misc',     name:'Misc',     icon:'🗂️', tint:'tint-green' },
   ];
 
-  // In-memory store only — nothing is written to disk or persisted between sessions.
-  let documents = []; // { id, name, size, type, folder, addedAt }
+  // Load database documents passed by Flask backend
+  let documents = [
+    {% if documents %}
+      {% for doc in documents %}
+      {
+        id: {{ doc.id }},
+        name: {{ doc.original_filename|tojson }},
+        size: {{ doc.file_size or 0 }},
+        type: {{ (doc.file_type or '')|tojson }},
+        folder: {{ doc.folder|tojson }},
+        addedAt: {{ (doc.created_at.strftime("%b %d, %Y") if doc.created_at else "")|tojson }},
+        downloadUrl: "/documents/{{ doc.id }}/download"
+      },
+      {% endfor %}
+    {% endif %}
+  ];
+
   let activeFolder = 'all';
   let searchTerm = '';
 
@@ -826,15 +945,18 @@
   const docCount = document.getElementById('docCount');
 
   function fileIcon(type, name){
-    if(type.startsWith('image/')) return '🖼️';
+    type = (type || '').toLowerCase();
+    name = (name || '').toLowerCase();
+    if(type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) return '🖼️';
     if(type === 'application/pdf' || name.endsWith('.pdf')) return '📄';
     if(type.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return '📝';
     if(type.includes('sheet') || name.endsWith('.xls') || name.endsWith('.xlsx') || name.endsWith('.csv')) return '📊';
-    if(type.includes('zip')) return '🗜️';
+    if(type.includes('zip') || name.endsWith('.zip') || name.endsWith('.tar') || name.endsWith('.gz')) return '🗜️';
     return '📎';
   }
 
   function formatSize(bytes){
+    if(!bytes || bytes <= 0) return '0 B';
     if(bytes < 1024) return bytes + ' B';
     if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
     return (bytes/(1024*1024)).toFixed(1) + ' MB';
@@ -855,9 +977,9 @@
     folderRow.appendChild(allTab);
 
     FOLDERS.forEach(f => {
-      const count = documents.filter(d => d.folder === f.id).length;
+      const count = documents.filter(d => (d.folder || '').toLowerCase() === f.id.toLowerCase()).length;
       const el = document.createElement('div');
-      el.className = 'folder ' + f.tint + (activeFolder === f.id ? ' active' : '');
+      el.className = 'folder ' + f.tint + (activeFolder.toLowerCase() === f.id.toLowerCase() ? ' active' : '');
       el.innerHTML = `
         <span class="icon-circle">${f.icon}</span>
         <div>
@@ -878,13 +1000,16 @@
 
   function renderGrid(){
     let list = documents;
-    if(activeFolder !== 'all') list = list.filter(d => d.folder === activeFolder);
+    if(activeFolder !== 'all') {
+      list = list.filter(d => (d.folder || '').toLowerCase() === activeFolder.toLowerCase());
+    }
     if(searchTerm.trim()){
       const q = searchTerm.trim().toLowerCase();
-      list = list.filter(d => d.name.toLowerCase().includes(q));
+      list = list.filter(d => (d.name || '').toLowerCase().includes(q));
     }
 
-    const label = activeFolder === 'all' ? 'All documents' : FOLDERS.find(f=>f.id===activeFolder).name;
+    const currentF = FOLDERS.find(f => f.id.toLowerCase() === activeFolder.toLowerCase());
+    const label = activeFolder === 'all' ? 'All documents' : (currentF ? currentF.name : activeFolder);
     gridLabel.textContent = searchTerm.trim() ? `Results for "${searchTerm}"` : label;
     gridCountPill.textContent = list.length + (list.length === 1 ? ' file' : ' files');
 
@@ -894,8 +1019,8 @@
       return;
     }
 
-    list.slice().reverse().forEach(doc => {
-      const folderMeta = FOLDERS.find(f => f.id === doc.folder);
+    list.forEach(doc => {
+      const folderMeta = FOLDERS.find(f => f.id.toLowerCase() === (doc.folder || '').toLowerCase()) || { name: doc.folder || 'Misc' };
       const card = document.createElement('div');
       const isSelected = selectedDocIds.has(doc.id);
       card.className = 'card' + (docSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
@@ -903,17 +1028,17 @@
         <span class="select-check">${isSelected ? '✓' : ''}</span>
         <div class="top-row">
           <span class="icon-circle-sm">${fileIcon(doc.type, doc.name)}</span>
-          <button class="del" title="Remove">✕</button>
+          <div class="card-actions">
+            <a href="${doc.downloadUrl || '/documents/' + doc.id + '/download'}" class="card-btn" title="Download file" onclick="event.stopPropagation();">⬇</a>
+            <button type="button" class="card-btn del" title="Remove document" onclick="event.stopPropagation(); deleteDocument(${doc.id});">✕</button>
+          </div>
         </div>
         <span class="folder-badge">${folderMeta.name}</span>
-        <div class="title">${doc.name}</div>
+        <div class="title">${escapeHtml(doc.name)}</div>
         <div class="meta"><span>${formatSize(doc.size)}</span><span>${doc.addedAt}</span></div>
       `;
-      card.querySelector('.del').onclick = () => {
-        documents = documents.filter(d => d.id !== doc.id);
-        renderAll();
-      };
-      card.addEventListener('click', e => {
+
+      card.addEventListener('click', () => {
         if(!docSelectMode) return;
         if(selectedDocIds.has(doc.id)) selectedDocIds.delete(doc.id);
         else selectedDocIds.add(doc.id);
@@ -922,6 +1047,11 @@
       });
       docGrid.appendChild(card);
     });
+  }
+
+  function escapeHtml(str) {
+    if(!str) return '';
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 
   function updateDocSelectionUI(){
@@ -934,31 +1064,102 @@
     renderGrid();
   }
 
-  function addFiles(fileList){
+  // Upload files to database via backend
+  async function uploadFiles(fileList){
+    if(!fileList || fileList.length === 0) return;
     const folder = targetFolder.value;
-    const now = new Date();
-    const stamp = now.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
-    Array.from(fileList).forEach(file => {
-      documents.push({
-        id: crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        folder,
-        addedAt: stamp
+    const formData = new FormData();
+    formData.append('folder', folder);
+    for(let i = 0; i < fileList.length; i++){
+      formData.append('files', fileList[i]);
+    }
+
+    const browseBtn = document.getElementById('browseBtn');
+    const originalText = browseBtn.textContent;
+    browseBtn.textContent = 'Uploading…';
+    browseBtn.disabled = true;
+
+    try {
+      const response = await fetch('/documents/upload', {
+        method: 'POST',
+        body: formData
       });
-    });
-    renderAll();
+      if(response.ok || response.redirected){
+        window.location.reload();
+      } else {
+        alert('Failed to upload files. Please try again.');
+      }
+    } catch(err) {
+      console.error(err);
+      alert('Error uploading files: ' + err.message);
+    } finally {
+      browseBtn.textContent = originalText;
+      browseBtn.disabled = false;
+    }
   }
 
-  // Wiring
+  // Delete single document from database
+  async function deleteDocument(docId){
+    if(!confirm('Are you sure you want to delete this document?')) return;
+    try {
+      const res = await fetch('/documents/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [docId] })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        documents = documents.filter(d => d.id !== docId);
+        selectedDocIds.delete(docId);
+        renderAll();
+      } else {
+        alert('Could not delete document.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error deleting document: ' + err.message);
+    }
+  }
+
+  // Batch delete selected documents from database
+  async function deleteSelectedDocuments(){
+    if(selectedDocIds.size === 0) return;
+    if(!confirm(`Delete ${selectedDocIds.size} selected document(s)?`)) return;
+
+    try {
+      const res = await fetch('/documents/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedDocIds) })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        documents = documents.filter(d => !selectedDocIds.has(d.id));
+        exitDocSelectMode();
+        renderAll();
+      } else {
+        alert('Could not delete selected documents.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error deleting documents: ' + err.message);
+    }
+  }
+
+  // File upload UI listeners
   document.getElementById('browseBtn').onclick = () => document.getElementById('fileInput').click();
-  document.getElementById('fileInput').onchange = e => { addFiles(e.target.files); e.target.value=''; };
+  document.getElementById('fileInput').onchange = e => {
+    uploadFiles(e.target.files);
+    e.target.value = '';
+  };
 
   const dz = document.getElementById('dropzone');
   ['dragenter','dragover'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add('dragover'); }));
   ['dragleave','drop'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove('dragover'); }));
-  dz.addEventListener('drop', e => { if(e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  dz.addEventListener('drop', e => {
+    e.preventDefault();
+    if(e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  });
 
   document.getElementById('searchInput').addEventListener('input', e => {
     searchTerm = e.target.value;
@@ -994,19 +1195,25 @@
   });
 
   docSelectCancel.addEventListener('click', exitDocSelectMode);
-
-  docDeleteSelectedBtn.addEventListener('click', () => {
-    if(selectedDocIds.size === 0) return;
-    documents = documents.filter(d => !selectedDocIds.has(d.id));
-    exitDocSelectMode();
-    renderAll();
-  });
+  docDeleteSelectedBtn.addEventListener('click', deleteSelectedDocuments);
 
   populateSelect();
   renderAll();
 
-  // Notepad
-  let notes = []; // { id, text, addedAt }
+  // --- Notepad / Database Connected Notes ---
+  let notes = [
+    {% if notes %}
+      {% for n in notes %}
+      {
+        id: {{ n.id }},
+        title: {{ (n.title or 'Quick Note')|tojson }},
+        text: {{ n.content|tojson }},
+        addedAt: {{ (n.created_at or '')|tojson }}
+      },
+      {% endfor %}
+    {% endif %}
+  ];
+
   const notesGrid = document.getElementById('notesGrid');
   const noteInput = document.getElementById('noteInput');
   let noteSelectMode = false;
@@ -1015,39 +1222,40 @@
   function renderNotes(){
     notesGrid.innerHTML = '';
     if(notes.length === 0){
-      notesGrid.innerHTML = `<div class="notes-empty">No notes yet.</div>`;
+      notesGrid.innerHTML = `<div class="notes-empty">No notes yet. Add one above to store it securely encrypted in the database.</div>`;
       return;
     }
-    notes.slice().reverse().forEach(note => {
+    notes.forEach(note => {
       const card = document.createElement('div');
       const isSelected = selectedNoteIds.has(note.id);
       card.className = 'note-card' + (noteSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
       card.innerHTML = `
         <span class="select-check">${isSelected ? '✓' : ''}</span>
         <div class="note-actions">
-          <button class="download" title="Download note">⬇</button>
-          <button class="del" title="Delete note">✕</button>
+          <button type="button" class="download" title="Download note">⬇</button>
+          <button type="button" class="del" title="Delete note">✕</button>
         </div>
         <p class="note-text"></p>
-        <div class="note-meta"><span>${note.addedAt}</span></div>
+        <div class="note-meta"><span>${note.addedAt || ''}</span></div>
       `;
       card.querySelector('.note-text').textContent = note.text;
-      card.querySelector('.download').onclick = () => {
-        const blob = new Blob([note.text], { type: 'text/plain' });
+      card.querySelector('.download').onclick = (e) => {
+        e.stopPropagation();
+        const blob = new Blob([note.text], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `note-${note.addedAt.replace(/\s|,/g,'-')}-${note.id.slice(0,6)}.txt`;
+        a.download = `note-${(note.addedAt || 'saved').replace(/[\s,:]+/g,'-')}.txt`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
       };
-      card.querySelector('.del').onclick = () => {
-        notes = notes.filter(n => n.id !== note.id);
-        renderNotes();
+      card.querySelector('.del').onclick = (e) => {
+        e.stopPropagation();
+        deleteSingleNote(note.id);
       };
-      card.addEventListener('click', e => {
+      card.addEventListener('click', () => {
         if(!noteSelectMode) return;
         if(selectedNoteIds.has(note.id)) selectedNoteIds.delete(note.id);
         else selectedNoteIds.add(note.id);
@@ -1062,18 +1270,100 @@
     noteDeleteSelectedBtn.textContent = `Delete (${selectedNoteIds.size})`;
   }
 
-  function saveNote(){
+  // Save note to database via POST /notes/add
+  async function saveNote(){
     const text = noteInput.value.trim();
     if(!text) return;
-    const stamp = new Date().toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
-    notes.push({ id: crypto.randomUUID(), text, addedAt: stamp });
-    noteInput.value = '';
-    renderNotes();
+
+    const saveBtn = document.getElementById('saveNoteBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    try {
+      const res = await fetch('/notes/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Quick Note',
+          content: text
+        })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        notes.unshift({
+          id: data.note.id,
+          title: data.note.title,
+          text: data.note.content,
+          addedAt: data.note.created_at
+        });
+        noteInput.value = '';
+        renderNotes();
+      } else {
+        alert(data.message || 'Failed to save note.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error saving note: ' + err.message);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save note';
+    }
+  }
+
+  // Delete single note from database
+  async function deleteSingleNote(noteId){
+    if(!confirm('Are you sure you want to delete this note?')) return;
+    try {
+      const res = await fetch('/notes/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [noteId] })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        notes = notes.filter(n => n.id !== noteId);
+        selectedNoteIds.delete(noteId);
+        renderNotes();
+      } else {
+        alert('Could not delete note.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error deleting note: ' + err.message);
+    }
+  }
+
+  // Delete selected notes from database
+  async function deleteSelectedNotes(){
+    if(selectedNoteIds.size === 0) return;
+    if(!confirm(`Delete ${selectedNoteIds.size} selected note(s)?`)) return;
+
+    try {
+      const res = await fetch('/notes/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedNoteIds) })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        notes = notes.filter(n => !selectedNoteIds.has(n.id));
+        exitNoteSelectMode();
+        renderNotes();
+      } else {
+        alert('Could not delete selected notes.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error deleting notes: ' + err.message);
+    }
   }
 
   document.getElementById('saveNoteBtn').onclick = saveNote;
   noteInput.addEventListener('keydown', e => {
-    if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote();
+    if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveNote();
+    }
   });
 
   const noteSelectToggle = document.getElementById('noteSelectToggle');
@@ -1105,16 +1395,11 @@
   });
 
   noteSelectCancel.addEventListener('click', exitNoteSelectMode);
-
-  noteDeleteSelectedBtn.addEventListener('click', () => {
-    if(selectedNoteIds.size === 0) return;
-    notes = notes.filter(n => !selectedNoteIds.has(n.id));
-    exitNoteSelectMode();
-  });
+  noteDeleteSelectedBtn.addEventListener('click', deleteSelectedNotes);
 
   renderNotes();
 
-  // Profile menu
+  // --- Profile Management Connected with Database ---
   const profileBtn = document.getElementById('profileBtn');
   const profileMenu = document.getElementById('profileMenu');
   profileBtn.addEventListener('click', e => {
@@ -1127,10 +1412,17 @@
     }
   });
 
-  // Profile modal
   let profile = {
-    name:'', email:'', phone:'', dob:'', gender:'', location:'', photo:null
+    name: {{ (user.name or user.username or '')|tojson if user else "''" }},
+    email: {{ (user.email or '')|tojson if user else "''" }},
+    phone: {{ (user.phone or '')|tojson if user else "''" }},
+    dob: {{ (user.date_of_birth or '')|tojson if user else "''" }},
+    gender: {{ (user.gender or '')|tojson if user else "''" }},
+    location: {{ (user.location or '')|tojson if user else "''" }},
+    photo: {{ (user.profile_photo or '')|tojson if user else "null" }}
   };
+
+  let pendingAvatarFile = null;
 
   const profileModal = document.getElementById('profileModal');
   const openProfileBtn = document.getElementById('openProfileBtn');
@@ -1153,24 +1445,8 @@
   const locationField = document.getElementById('profileLocation');
 
   function getInitial(){
-    return profile.name.trim() ? profile.name.trim()[0].toUpperCase() : 'A';
-  }
-
-  function openProfileModal(){
-    profileMenu.classList.remove('open');
-    nameField.value = profile.name;
-    emailField.value = profile.email;
-    phoneField.value = profile.phone;
-    dobField.value = profile.dob;
-    genderField.value = profile.gender;
-    locationField.value = profile.location;
-    updatePhotoPreview();
-    saveToast.classList.remove('show');
-    profileModal.classList.add('open');
-  }
-
-  function closeProfileModal(){
-    profileModal.classList.remove('open');
+    const n = (profile.name || '').trim();
+    return n ? n[0].toUpperCase() : 'A';
   }
 
   function updateMenuDisplay(){
@@ -1190,6 +1466,24 @@
     updateMenuDisplay();
   }
 
+  function openProfileModal(){
+    profileMenu.classList.remove('open');
+    nameField.value = profile.name;
+    emailField.value = profile.email;
+    phoneField.value = profile.phone;
+    dobField.value = profile.dob;
+    genderField.value = profile.gender;
+    locationField.value = profile.location;
+    pendingAvatarFile = null;
+    updatePhotoPreview();
+    saveToast.classList.remove('show');
+    profileModal.classList.add('open');
+  }
+
+  function closeProfileModal(){
+    profileModal.classList.remove('open');
+  }
+
   openProfileBtn.addEventListener('click', openProfileModal);
   closeProfileBtn.addEventListener('click', closeProfileModal);
   cancelProfileBtn.addEventListener('click', closeProfileModal);
@@ -1199,6 +1493,7 @@
   photoInput.addEventListener('change', e => {
     const file = e.target.files[0];
     if(!file) return;
+    pendingAvatarFile = file;
     const reader = new FileReader();
     reader.onload = ev => {
       profile.photo = ev.target.result;
@@ -1206,25 +1501,62 @@
     };
     reader.readAsDataURL(file);
   });
+
   removePhotoBtn.addEventListener('click', () => {
-    profile.photo = null;
+    profile.photo = '';
+    pendingAvatarFile = null;
     photoInput.value = '';
     updatePhotoPreview();
   });
 
-  saveProfileBtn.addEventListener('click', () => {
-    profile.name = nameField.value.trim();
-    profile.email = emailField.value.trim();
-    profile.phone = phoneField.value.trim();
-    profile.dob = dobField.value;
-    profile.gender = genderField.value;
-    profile.location = locationField.value.trim();
-    updatePhotoPreview();
-    saveToast.classList.add('show');
-    setTimeout(() => closeProfileModal(), 700);
+  // Save profile to database via POST /profile/update
+  saveProfileBtn.addEventListener('click', async () => {
+    saveProfileBtn.disabled = true;
+    saveProfileBtn.textContent = 'Saving…';
+
+    const formData = new FormData();
+    formData.append('name', nameField.value.trim());
+    formData.append('phone', phoneField.value.trim());
+    formData.append('date_of_birth', dobField.value);
+    formData.append('gender', genderField.value);
+    formData.append('location', locationField.value.trim());
+
+    if(pendingAvatarFile){
+      formData.append('avatar_file', pendingAvatarFile);
+    } else if(profile.photo !== undefined){
+      formData.append('profile_photo', profile.photo || '');
+    }
+
+    try {
+      const res = await fetch('/profile/update', {
+        method: 'POST',
+        body: formData
+      });
+      if(res.ok || res.redirected){
+        profile.name = nameField.value.trim();
+        profile.phone = phoneField.value.trim();
+        profile.dob = dobField.value;
+        profile.gender = genderField.value;
+        profile.location = locationField.value.trim();
+        updatePhotoPreview();
+        saveToast.classList.add('show');
+        setTimeout(() => closeProfileModal(), 700);
+      } else {
+        alert('Failed to update profile.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error updating profile: ' + err.message);
+    } finally {
+      saveProfileBtn.disabled = false;
+      saveProfileBtn.textContent = 'Save changes';
+    }
   });
 
-  // Settings modal
+  // Initialize photo preview on page load
+  updatePhotoPreview();
+
+  // --- Settings modal & Dark Mode ---
   const settingsModal = document.getElementById('settingsModal');
   const openSettingsBtn = document.getElementById('openSettingsBtn');
   const closeSettingsBtn = document.getElementById('closeSettingsBtn');
@@ -1243,23 +1575,28 @@
   closeSettingsBtn.addEventListener('click', closeSettingsModal);
   settingsModal.addEventListener('click', e => { if(e.target === settingsModal) closeSettingsModal(); });
 
-  // Dark mode
+  // Dark mode persistence
+  if(localStorage.getItem('vault_theme') === 'dark'){
+    document.documentElement.setAttribute('data-theme', 'dark');
+    darkModeToggle.checked = true;
+  }
+
   darkModeToggle.addEventListener('change', () => {
     if(darkModeToggle.checked){
       document.documentElement.setAttribute('data-theme', 'dark');
+      localStorage.setItem('vault_theme', 'dark');
     } else {
       document.documentElement.removeAttribute('data-theme');
+      localStorage.setItem('vault_theme', 'light');
     }
   });
 
-  // Jump to document selection mode from settings
   manageDocsBtn.addEventListener('click', () => {
     closeSettingsModal();
     if(!docSelectMode) docSelectToggle.click();
     document.getElementById('gridLabel').scrollIntoView({ behavior:'smooth', block:'center' });
   });
 
-  // Jump to note selection mode from settings
   manageNotesBtn.addEventListener('click', () => {
     closeSettingsModal();
     if(!noteSelectMode) noteSelectToggle.click();
@@ -1268,4 +1605,3 @@
 </script>
 </body>
 </html>
-{% endblock %}
