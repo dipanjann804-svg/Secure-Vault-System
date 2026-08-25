@@ -1,25 +1,28 @@
 import os
 import smtplib
 import logging
+from dotenv import load_dotenv
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 def send_password_reset_email(to_email: str, reset_url: str) -> bool:
     """
     Sends a secure password reset link to the user's email address via SMTP (e.g. Gmail).
     """
-    mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
+    mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com").strip()
     mail_port = int(os.environ.get("MAIL_PORT", 587))
-    mail_username = os.environ.get("MAIL_USERNAME")
-    mail_password = os.environ.get("MAIL_PASSWORD")
-    mail_sender = os.environ.get("MAIL_DEFAULT_SENDER", mail_username or "noreply@securevault.local")
+    mail_username = (os.environ.get("MAIL_USERNAME") or "").strip()
+    mail_password = (os.environ.get("MAIL_PASSWORD") or "").replace(" ", "").strip()
+    mail_sender = os.environ.get("MAIL_DEFAULT_SENDER", mail_username or "noreply@securevault.local").strip()
 
     if not mail_username or not mail_password:
+        print("[!] EMAIL NOTICE: MAIL_USERNAME or MAIL_PASSWORD environment variables are not set. Email cannot be sent.")
         logger.warning(
             "MAIL_USERNAME or MAIL_PASSWORD not configured. "
-            "Skipping real email dispatch. (Configure in .env to enable Gmail sending)"
+            "Skipping real email dispatch. (Configure in Render Environment Variables or .env)"
         )
         return False
 
@@ -90,17 +93,19 @@ Secure Vault Security Team
 
     try:
         if mail_port == 465:
-            with smtplib.SMTP_SSL(mail_server, mail_port, timeout=10) as server:
+            with smtplib.SMTP_SSL(mail_server, mail_port, timeout=15) as server:
                 server.login(mail_username, mail_password)
                 server.sendmail(mail_sender, [to_email], msg.as_string())
         else:
-            with smtplib.SMTP(mail_server, mail_port, timeout=10) as server:
+            with smtplib.SMTP(mail_server, mail_port, timeout=15) as server:
                 server.starttls()
                 server.login(mail_username, mail_password)
                 server.sendmail(mail_sender, [to_email], msg.as_string())
 
+        print(f"[+] Password reset email sent successfully to {to_email}")
         logger.info(f"Password reset email sent successfully to {to_email}")
         return True
     except Exception as e:
-        logger.error(f"Failed to send password reset email to {to_email}: {e}")
+        print(f"[!] EMAIL ERROR: Failed to send email to {to_email}. Reason: {e}")
+        logger.error(f"Failed to send password reset email to {to_email}: {e}", exc_info=True)
         return False
