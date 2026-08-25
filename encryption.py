@@ -1,22 +1,34 @@
 import os
+import base64
+import hashlib
+from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
-try:
-    from config import Config
-    ENCRYPTION_KEY = getattr(Config, 'ENCRYPTION_KEY', None)
-except ImportError:
-    ENCRYPTION_KEY = None
+load_dotenv()
 
-if not ENCRYPTION_KEY:
-    ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "s4xzdDtj_Aa1wb8ojuqmyWgHHrXr-RBO1_cCQ4ZrzmE=")
+def _get_fernet():
+    key = os.environ.get("ENCRYPTION_KEY")
+    if not key:
+        # Safely derive a 32-byte urlsafe base64 key from SECRET_KEY without hardcoding secrets
+        secret = os.environ.get("SECRET_KEY", "default-vault-secure-seed-key")
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode('utf-8')).digest()).decode('utf-8')
+    elif isinstance(key, str):
+        key = key.strip()
+    return Fernet(key.encode('utf-8') if isinstance(key, str) else key)
 
-fernet = Fernet(ENCRYPTION_KEY.encode())
+fernet = _get_fernet()
 
-# ENCRYPT / DECRYPT
 def encrypt_note(plain_text: str) -> str:
     """Encrypts note content before it's saved to the database."""
-    return fernet.encrypt(plain_text.encode()).decode()
+    if not plain_text:
+        return ""
+    return fernet.encrypt(plain_text.encode('utf-8')).decode('utf-8')
 
 def decrypt_note(encrypted_text: str) -> str:
     """Decrypts note content after it's read from the database."""
-    return fernet.decrypt(encrypted_text.encode()).decode()
+    if not encrypted_text:
+        return ""
+    try:
+        return fernet.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return "[Decryption Error: Invalid Key]"
