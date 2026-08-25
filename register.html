@@ -1,47 +1,49 @@
-{% extends "base.html" %}
-{% block title %}NexVault — Register{% endblock %}
-
-{% block head %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexVault — Register</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
   :root{
-    --bg: #ffffff;
-    --brass: #4b2e83;
-    --brass-dim: #6a53a3;
-    --ink: #4b2e83;
-    --ink-dim: #6a53a3;
-    --hairline: rgba(75,46,131,0.25);
-    --hairline-soft: rgba(75,46,131,0.14);
-    --error: #d1445c;
+    --bg: #2b2b30;
+    --panel-bg: #38383f;
+    --brass: #ffffff;
+    --brass-dim: #b7b7c2;
+    --ink: #ffffff;
+    --ink-dim: #c7c7d1;
+    --hairline: rgba(255,255,255,0.16);
+    --hairline-soft: rgba(255,255,255,0.10);
+    --error: #ff9d8a;
+    --success: #a3e635;
   }
 
-  @media (prefers-color-scheme: dark){
-    :root{
-      --bg: #1f0a34;
-      --brass: #ffffff;
-      --brass-dim: #d7ddd1;
-      --ink: #ffffff;
-      --ink-dim: #e4e8de;
-      --hairline: rgba(255,255,255,0.18);
-      --hairline-soft: rgba(255,255,255,0.10);
-      --error: #ff9d8a;
-    }
-  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
 
-  #registerView{
-    min-height: 100vh;
-    width: 100%;
+  html,body{
+    height:100%;
     background: var(--bg);
     color: var(--ink);
     font-family: 'IBM Plex Sans', sans-serif;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  }
+
+  body{
+    position: relative;
+  }
+
+  /* ---------- Shared view wrapper ---------- */
+  .view{
+    display:flex;
+    min-height: 100vh;
+    align-items:center;
+    justify-content:center;
     position: relative;
     padding: 2rem;
   }
 
+  /* ---------- Register view ---------- */
   .home-link{
     position: fixed;
     top: 2.4rem;
@@ -56,6 +58,9 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    cursor: pointer;
+    background: none;
+    border: none;
     transition: color 0.2s ease;
   }
   .home-link:hover{ color: var(--brass); }
@@ -64,27 +69,37 @@
   .panel{
     width: 100%;
     max-width: 368px;
+    background: var(--panel-bg);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 2.6rem 2.4rem;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.35);
   }
 
-  .eyebrow{
-    font-family: 'IBM Plex Mono', monospace;
+  @media (max-width: 480px){
+    .panel{ padding: 2rem 1.6rem; }
+    .home-link{ top: 1.4rem; left: 1.4rem; }
+  }
+
+  .panel .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
     font-size: 0.68rem;
     letter-spacing: 0.42em;
     text-transform: uppercase;
     color: var(--brass-dim);
     margin-bottom: 1.4rem;
+    text-align: center;
   }
 
-  #registerView h1{
-    font-family: 'Fraunces', serif;
+  .panel h1{
+    font-family:'Fraunces', serif;
     font-weight: 500;
     font-size: clamp(2.2rem, 6vw, 2.7rem);
     line-height: 1.05;
-    letter-spacing: -0.01em;
+    text-align: center;
     color: var(--ink);
-    margin: 0;
   }
-  #registerView h1 em{
+  .panel h1 em{
     color: var(--brass);
     font-style: italic;
     font-weight: 300;
@@ -94,23 +109,30 @@
     margin-top: 0.7rem;
     font-size: 0.9rem;
     color: var(--ink-dim);
+    text-align: center;
     letter-spacing: 0.01em;
   }
 
-  .server-errors{
+  .alert{
     margin-top: 1.4rem;
-    border: 1px solid var(--error);
-    background: rgba(209,68,92,0.08);
-    color: var(--error);
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
     font-size: 0.82rem;
-    padding: 0.85rem 1rem;
-    border-radius: 1px;
+    letter-spacing: 0.01em;
   }
-  .server-errors ul{ list-style: disc; padding-left: 1.1em; margin: 0; }
-  .server-errors li + li{ margin-top: 0.25rem; }
+  .alert-error{
+    background: rgba(255, 157, 138, 0.12);
+    border: 1px solid var(--error);
+    color: var(--error);
+  }
+  .alert-success{
+    background: rgba(163, 230, 53, 0.12);
+    border: 1px solid var(--success);
+    color: var(--success);
+  }
 
-  #registerForm{
-    margin-top: 2.6rem;
+  form{
+    margin-top: 2rem;
     display: flex;
     flex-direction: column;
     gap: 1.3rem;
@@ -225,107 +247,110 @@
     color: var(--ink-dim);
   }
   .register-line a{
-    color: var(--brass);
+    color: #ffffff;
     text-decoration: none;
     border-bottom: 1px solid var(--hairline);
+    transition: border-color 0.2s ease;
   }
-  .register-line a:hover{ border-color: var(--brass); }
-
-  @media (max-width: 480px){
-    .home-link{ top: 1.4rem; left: 1.4rem; }
-    .panel{ max-width: 100%; }
+  .register-line a:hover{
+    border-color: var(--brass);
   }
 </style>
-{% endblock %}
+</head>
+<body>
+  <section id="registerView" class="view active">
+    <a class="home-link" href="/">
+      <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3L4.5 8L9.5 13" stroke="currentColor" stroke-width="1.3"/></svg>
+      NexVault
+    </a>
 
-{% block nav %}{% endblock %}
-{% block main_class %}flex-1 w-full p-0{% endblock %}
-{% block footer %}{% endblock %}
+    <div class="panel">
+      <div class="eyebrow">Join NexVault</div>
+      <h1>Create <em>Account</em></h1>
+      <p class="sub">Set up your vault in a few seconds.</p>
 
-{% block content %}
-<section id="registerView">
-  <a class="home-link" href="{{ url_for('index') }}">
-    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3L4.5 8L9.5 13" stroke="currentColor" stroke-width="1.3"/></svg>
-    NexVault
-  </a>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert {% if category == 'success' %}alert-success{% else %}alert-error{% endif %}">
+              {{ message }}
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
 
-  <div class="panel">
-    <div class="eyebrow">Join NexVault</div>
-    <h1>Create <em>Account</em></h1>
-    <p class="sub">Set up your vault in a few seconds.</p>
+      {% if errors %}
+        <div class="alert alert-error">
+          <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for e in errors %}
+              <li>{{ e }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
 
-    {% if errors %}
-    <div class="server-errors">
-      <ul>
-        {% for e in errors %}
-        <li>{{ e }}</li>
-        {% endfor %}
-      </ul>
+      <form id="registerForm" method="POST" action="/register">
+        <div class="field" id="usernameField">
+          <label for="username">Username</label>
+          <div class="field-input">
+            <input type="text" id="username" name="username" placeholder="thepythonmentor" autocomplete="username" required>
+          </div>
+          <span class="error-msg" id="usernameError">Username must be at least 3 characters.</span>
+        </div>
+
+        <div class="field" id="registerEmailField">
+          <label for="registerEmail">Email Address</label>
+          <div class="field-input">
+            <input type="email" id="registerEmail" name="email" placeholder="you@domain.com" autocomplete="email" required>
+          </div>
+          <span class="error-msg" id="registerEmailError">Enter a valid email address.</span>
+        </div>
+
+        <div class="field" id="registerPasswordField">
+          <label for="registerPassword">Password</label>
+          <div class="field-input">
+            <input type="password" id="registerPassword" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="new-password" required>
+            <button type="button" class="toggle-visibility" id="toggleRegisterBtn">Show</button>
+          </div>
+          <span class="error-msg" id="registerPasswordError">Password must be at least 6 characters.</span>
+        </div>
+
+        <div class="field" id="confirmPasswordField">
+          <label for="confirmPassword">Confirm Password</label>
+          <div class="field-input">
+            <input type="password" id="confirmPassword" name="confirm_password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="new-password" required>
+            <button type="button" class="toggle-visibility" id="toggleConfirmBtn">Show</button>
+          </div>
+          <span class="error-msg" id="confirmPasswordError">Passwords do not match.</span>
+        </div>
+
+        <button type="submit" class="submit" id="registerSubmitBtn">Create Account</button>
+      </form>
+
+      <p class="register-line">Already have an account? <a href="/login">Sign in</a></p>
     </div>
-    {% endif %}
-
-    <form id="registerForm" method="POST" action="/register" novalidate>
-      <div class="field" id="usernameField">
-        <label for="username">Username</label>
-        <div class="field-input">
-          <input type="text" id="username" name="username" placeholder="thepythonmentor" autocomplete="username" minlength="3" maxlength="80" required>
-        </div>
-        <span class="error-msg" id="usernameError">Username must be 3–80 characters.</span>
-      </div>
-
-      <div class="field" id="emailField">
-        <label for="email">Email Address</label>
-        <div class="field-input">
-          <input type="email" id="email" name="email" placeholder="you@domain.com" autocomplete="email" maxlength="120" required>
-        </div>
-        <span class="error-msg" id="emailError">Enter a valid email address.</span>
-      </div>
-
-      <div class="field" id="passwordField">
-        <label for="password">Password</label>
-        <div class="field-input">
-          <input type="password" id="password" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="new-password" minlength="6" required>
-          <button type="button" class="toggle-visibility" id="togglePasswordBtn">Show</button>
-        </div>
-        <span class="error-msg" id="passwordError">Password must be at least 6 characters.</span>
-      </div>
-
-      <div class="field" id="confirmPasswordField">
-        <label for="confirm_password">Confirm Password</label>
-        <div class="field-input">
-          <input type="password" id="confirm_password" name="confirm_password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="new-password" minlength="6" required>
-          <button type="button" class="toggle-visibility" id="toggleConfirmBtn">Show</button>
-        </div>
-        <span class="error-msg" id="confirmPasswordError">Passwords do not match.</span>
-      </div>
-
-      <button type="submit" class="submit" id="registerSubmitBtn">Create Account</button>
-    </form>
-
-    <p class="register-line">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
-  </div>
-</section>
+  </section>
 
 <script>
   const registerForm = document.getElementById('registerForm');
   const usernameField = document.getElementById('usernameField');
-  const emailField = document.getElementById('emailField');
-  const passwordField = document.getElementById('passwordField');
+  const registerEmailField = document.getElementById('registerEmailField');
+  const registerPasswordField = document.getElementById('registerPasswordField');
   const confirmPasswordField = document.getElementById('confirmPasswordField');
 
   const usernameInput = document.getElementById('username');
-  const emailInput = document.getElementById('email');
-  const passwordInput = document.getElementById('password');
-  const confirmPasswordInput = document.getElementById('confirm_password');
+  const registerEmailInput = document.getElementById('registerEmail');
+  const registerPasswordInput = document.getElementById('registerPassword');
+  const confirmPasswordInput = document.getElementById('confirmPassword');
 
-  const togglePasswordBtn = document.getElementById('togglePasswordBtn');
+  const toggleRegisterBtn = document.getElementById('toggleRegisterBtn');
   const toggleConfirmBtn = document.getElementById('toggleConfirmBtn');
   const registerSubmitBtn = document.getElementById('registerSubmitBtn');
 
-  togglePasswordBtn.addEventListener('click', () => {
-    const isPassword = passwordInput.type === 'password';
-    passwordInput.type = isPassword ? 'text' : 'password';
-    togglePasswordBtn.textContent = isPassword ? 'Hide' : 'Show';
+  toggleRegisterBtn.addEventListener('click', () => {
+    const isPassword = registerPasswordInput.type === 'password';
+    registerPasswordInput.type = isPassword ? 'text' : 'password';
+    toggleRegisterBtn.textContent = isPassword ? 'Hide' : 'Show';
   });
 
   toggleConfirmBtn.addEventListener('click', () => {
@@ -348,42 +373,43 @@
       usernameField.classList.remove('error');
     }
 
-    if(!validEmail(emailInput.value.trim())){
-      emailField.classList.add('error');
+    if(!validEmail(registerEmailInput.value.trim())){
+      registerEmailField.classList.add('error');
       ok = false;
     } else {
-      emailField.classList.remove('error');
+      registerEmailField.classList.remove('error');
     }
 
-    if(passwordInput.value.length < 6){
-      passwordField.classList.add('error');
+    if(registerPasswordInput.value.length < 6){
+      registerPasswordField.classList.add('error');
       ok = false;
     } else {
-      passwordField.classList.remove('error');
+      registerPasswordField.classList.remove('error');
     }
 
-    if(confirmPasswordInput.value.length === 0 || confirmPasswordInput.value !== passwordInput.value){
+    if(confirmPasswordInput.value.length === 0 || confirmPasswordInput.value !== registerPasswordInput.value){
       confirmPasswordField.classList.add('error');
       ok = false;
     } else {
       confirmPasswordField.classList.remove('error');
     }
 
-    if(!ok){
+    if(!ok) {
       e.preventDefault();
       return;
     }
 
-    // Valid on the client — let the form submit for real to the Flask
-    // /register route, which does its own authoritative validation too.
     registerSubmitBtn.disabled = true;
     registerSubmitBtn.textContent = 'Creating…';
+    registerForm.submit();
   });
 
-  [usernameInput, emailInput, passwordInput, confirmPasswordInput].forEach((input) => {
+  [usernameInput, registerEmailInput, registerPasswordInput, confirmPasswordInput].forEach((input) => {
     input.addEventListener('input', () => {
       input.closest('.field').classList.remove('error');
     });
   });
 </script>
-{% endblock %}
+
+</body>
+</html>
