@@ -1,0 +1,22 @@
+# Environment variables (keep your passwords and secret keys safe)
+.env
+
+# Cloudflared and local binaries
+cloudflared.exe
+*.exe
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# SQLite databases & instance folder
+*.db
+instance/
+
+# Uploaded test files
+uploads/*
+!uploads/.gitkeep
