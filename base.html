@@ -1,43 +1,44 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{% block title %}Flask Auth Lite{% endblock %}</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Secure Vault System{% endblock %}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  {% block head %}{% endblock %}
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: '#6366f1'
+          }
+        }
+      }
+    }
+  </script>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
-  {% block nav %}
-  <nav class="border-b border-slate-800 bg-slate-900/50">
-    <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-      <a href="/" class="font-semibold text-lg">Flask Auth Lite</a>
-      <div class="flex items-center gap-4 text-sm">
-        {% if session.get('user_id') %}
-          <a href="/dashboard" class="text-slate-300 hover:text-white">Dashboard</a>
-          <a href="/logout" class="text-slate-300 hover:text-white">Logout</a>
-        {% else %}
-          <a href="/login" class="text-slate-300 hover:text-white">Login</a>
-          <a href="/register" class="text-slate-300 hover:text-white">Register</a>
-        {% endif %}
-      </div>
-    </div>
-  </nav>
-  {% endblock %}
+<body class="min-h-full flex flex-col justify-between p-6 antialiased">
+  <header class="max-w-4xl w-full mx-auto flex items-center justify-between pb-6 border-b border-slate-800">
+    <a href="/" class="text-xl font-bold text-slate-100 tracking-tight flex items-center gap-2">
+      <span>🔒</span> Secure Vault
+    </a>
+    <nav class="flex items-center gap-4 text-sm font-medium">
+      {% if current_user.is_authenticated %}
+        <a href="/dashboard" class="text-slate-300 hover:text-white transition">Dashboard</a>
+        <a href="/logout" class="rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 hover:bg-slate-800 transition">Logout</a>
+      {% else %}
+        <a href="/login" class="text-slate-300 hover:text-white transition">Login</a>
+        <a href="/register" class="rounded-xl bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-500 transition">Register</a>
+      {% endif %}
+    </nav>
+  </header>
 
-  <main class="{% block main_class %}flex-1 max-w-4xl w-full mx-auto px-4 py-10{% endblock %}">
+  <main class="max-w-4xl w-full mx-auto my-8 flex-1">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="mb-6 space-y-2">
           {% for category, message in messages %}
-            <div class="rounded-xl border px-4 py-2 text-sm
-              {% if category == 'error' %}
-                border-red-800 bg-red-950/50 text-red-300
-              {% elif category == 'success' %}
-                border-emerald-800 bg-emerald-950/50 text-emerald-300
-              {% else %}
-                border-slate-700 bg-slate-800/50 text-slate-300
-              {% endif %}">
+            <div class="p-4 rounded-xl text-sm {% if category == 'success' %}bg-emerald-500/10 text-emerald-300 border border-emerald-500/20{% else %}bg-rose-500/10 text-rose-300 border border-rose-500/20{% endif %}">
               {{ message }}
             </div>
           {% endfor %}
@@ -48,10 +49,8 @@
     {% block content %}{% endblock %}
   </main>
 
-  {% block footer %}
-  <footer class="border-t border-slate-800 py-4">
-    <p class="text-center text-xs text-slate-500">Flask Auth Lite</p>
+  <footer class="max-w-4xl w-full mx-auto pt-6 border-t border-slate-900 text-center text-xs text-slate-500">
+    &copy; Secure Vault System. All rights reserved.
   </footer>
-  {% endblock %}
 </body>
 </html>
