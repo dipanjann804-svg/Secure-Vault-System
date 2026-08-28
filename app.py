@@ -19,6 +19,7 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import text, func
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
@@ -37,6 +38,7 @@ def create_app():
     root_dir = os.path.dirname(os.path.abspath(__file__))
     tpl_dir = 'templates' if os.path.isdir(os.path.join(root_dir, 'templates')) else '.'
     app = Flask(__name__, template_folder=tpl_dir)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-vault-123')
     app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -206,18 +208,18 @@ def create_app():
         return ip or '127.0.0.1'
 
     def get_base_url():
-        load_dotenv(override=True)
         configured_url = os.environ.get('APP_URL') or os.environ.get('BASE_URL')
         if configured_url:
-            return configured_url.rstrip('/')
+            return configured_url.strip().rstrip('/')
 
-        host = request.host
+        scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
+        host = request.headers.get('X-Forwarded-Host', request.host)
         if '127.0.0.1' in host or 'localhost' in host:
             local_ip = get_local_ip()
             port = host.split(':')[-1] if ':' in host else '5555'
-            return f"{request.scheme}://{local_ip}:{port}"
+            return f"{scheme}://{local_ip}:{port}"
 
-        return f"{request.scheme}://{host}"
+        return f"{scheme}://{host}"
 
     @app.route("/forgot-password", methods=["GET", "POST"])
     def forgot_password():
@@ -230,13 +232,18 @@ def create_app():
             if not email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
                 errors.append("Please enter a valid email address")
             else:
-                user = User.query.filter_by(email=email).first()
+                user = User.query.filter(func.lower(User.email) == email).first()
                 if user:
+                    print(f"[+] Password reset requested for registered user: {user.email}")
                     s = get_serializer()
                     token = s.dumps(user.email, salt="password-reset-salt")
                     base_url = get_base_url()
                     reset_link = f"{base_url}/reset-password/{token}"
-                    send_password_reset_email(user.email, reset_link)
+                    sent = send_password_reset_email(user.email, reset_link)
+                    if not sent:
+                        print(f"[!] Email dispatch failed for: {user.email}")
+                else:
+                    print(f"[!] Password reset requested but email NOT found in database: {email}. Make sure the user is registered on this instance.")
 
                 flash(
                     "If an account exists with that email address, a password reset link has been sent to your email inbox.",
