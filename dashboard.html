@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dashboard</title>
+<script>
+  // Apply saved theme before first paint (default dark) to avoid a theme flash
+  try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('vault_theme') || 'dark'); }
+  catch(e){ document.documentElement.setAttribute('data-theme', 'dark'); }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -64,7 +69,7 @@
     font-family:'Inter', system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
     min-height:100vh;
   }
-  .wrap{max-width:1180px;margin:0 auto; padding: 36px 24px 90px;}
+  .wrap{max-width:100%;margin:0 auto; padding: 36px 32px 90px;}
 
   /* Header */
   header{
@@ -90,8 +95,9 @@
 
   .search-bar{
     position:relative;
-    min-width:300px;
-    flex:0 1 380px;
+    min-width:320px;
+    flex:1 1 560px;
+    max-width:640px;
   }
   .search-bar input{
     width:100%;
@@ -1575,20 +1581,25 @@
   closeSettingsBtn.addEventListener('click', closeSettingsModal);
   settingsModal.addEventListener('click', e => { if(e.target === settingsModal) closeSettingsModal(); });
 
-  // Dark mode persistence
-  if(localStorage.getItem('vault_theme') === 'dark'){
-    document.documentElement.setAttribute('data-theme', 'dark');
-    darkModeToggle.checked = true;
+  // Dark / light mode — synced with auth + landing pages via vault_theme (default dark)
+  function applyTheme(t){
+    if(t === 'light'){
+      document.documentElement.setAttribute('data-theme', 'light');
+      darkModeToggle.checked = false;
+    } else {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      darkModeToggle.checked = true;
+    }
+    try{ localStorage.setItem('vault_theme', t); }catch(e){}
   }
+  (function initTheme(){
+    let stored = 'dark';
+    try{ stored = localStorage.getItem('vault_theme') || 'dark'; }catch(e){}
+    applyTheme(stored);
+  })();
 
   darkModeToggle.addEventListener('change', () => {
-    if(darkModeToggle.checked){
-      document.documentElement.setAttribute('data-theme', 'dark');
-      localStorage.setItem('vault_theme', 'dark');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
-      localStorage.setItem('vault_theme', 'light');
-    }
+    applyTheme(darkModeToggle.checked ? 'dark' : 'light');
   });
 
   manageDocsBtn.addEventListener('click', () => {

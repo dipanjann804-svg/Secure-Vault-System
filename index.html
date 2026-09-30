@@ -3,376 +3,225 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NexVault</title>
+<title>Secure Vault — Encrypted Document Storage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
   :root{
-    --bg: #2b2b30;
-    --brass: #ffffff;
-    --brass-dim: #b7b7c2;
-    --ink: #ffffff;
-    --ink-dim: #c7c7d1;
-    --hairline: rgba(255,255,255,0.16);
-    --hairline-soft: rgba(255,255,255,0.10);
-    --error: #ff9d8a;
+    --purple:#6366f1;
+    --purple-dark:#4f46e5;
+    --purple-tint:#333340;
+    --blue-tint:#283240;
+    --green-tint:#22352c;
+    --yellow-tint:#383424;
+    --yellow-border:#564e30;
+    --ink:#f3f4f6;
+    --muted:#9ca3af;
+    --border:#3a3a46;
+    --bg:#202025;
+    --surface:#282830;
+    --surface-soft:#303038;
+    --surface-soft-hover:#383842;
   }
-
-  *{ margin:0; padding:0; box-sizing:border-box; }
-
-  html,body{
-    height:100%;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: 'IBM Plex Sans', sans-serif;
+  html[data-theme="dark"]{
+    --purple:#818cf8;
+    --purple-dark:#6366f1;
+    --purple-tint:#333340;
+    --blue-tint:#283240;
+    --green-tint:#22352c;
+    --yellow-tint:#383424;
+    --yellow-border:#564e30;
+    --ink:#f3f4f6;
+    --muted:#9ca3af;
+    --border:#3a3a46;
+    --bg:#202025;
+    --surface:#282830;
+    --surface-soft:#303038;
+    --surface-soft-hover:#383842;
   }
-
+  html[data-theme="light"]{
+    --purple:#5B3FE0;
+    --purple-dark:#4A31C4;
+    --purple-tint:#EFEAFF;
+    --blue-tint:#E7F0FF;
+    --green-tint:#EAF7EE;
+    --yellow-tint:#FFF6DA;
+    --yellow-border:#F4E4A6;
+    --ink:#16151F;
+    --muted:#6B7280;
+    --border:#E7E5F0;
+    --bg:#ffffff;
+    --surface:#ffffff;
+    --surface-soft:#F7F6FC;
+    --surface-soft-hover:#EFEDF6;
+  }
+  *{box-sizing:border-box;}
   body{
-    position: relative;
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter', system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    min-height:100vh;
+    transition: background .2s ease, color .2s ease;
   }
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 24px;min-height:100vh;display:flex;flex-direction:column;}
+  @keyframes pop{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
 
-  /* ---------- Shared view wrapper ---------- */
-  .view{
-    display:none;
-    min-height: 100vh;
+  /* Top nav — same language as dashboard header */
+  .nav{
+    display:flex;
     align-items:center;
-    justify-content:center;
-    position: relative;
-    padding: 2rem;
-    overflow: hidden;
+    justify-content:space-between;
+    gap:16px;
+    flex-wrap:wrap;
+    margin-bottom:44px;
   }
-  .view.active{ display:flex; }
+  .brand{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    text-decoration:none;
+    color:var(--ink);
+    font-weight:800;
+    font-size:16px;
+    letter-spacing:-0.01em;
+  }
+  .brand .logo{
+    width:38px;height:38px;
+    border-radius:50%;
+    background:var(--purple);
+    display:flex;align-items:center;justify-content:center;
+    font-size:18px;
+    flex-shrink:0;
+  }
+  .brand span.accent{color:var(--purple);}
+  .nav-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .theme-btn{
+    font-family:inherit;font-size:12.5px;font-weight:600;
+    padding:9px 14px;
+    background:var(--surface-soft);color:var(--ink);
+    border:1px solid var(--border);border-radius:999px;cursor:pointer;
+  }
+  .theme-btn:hover{background:var(--surface-soft-hover);}
+  .btn-secondary{
+    font-family:inherit;font-size:13.5px;font-weight:600;
+    padding:11px 20px;
+    background:var(--surface-soft);color:var(--ink);
+    border:1px solid var(--border);border-radius:999px;cursor:pointer;
+    text-decoration:none;display:inline-block;
+  }
+  .btn-secondary:hover{background:var(--surface-soft-hover);}
+  .btn-primary{
+    font-family:inherit;font-size:13.5px;font-weight:600;
+    padding:11px 22px;
+    background:var(--purple);color:#fff;
+    border:none;border-radius:999px;cursor:pointer;
+    text-decoration:none;display:inline-block;
+    transition:background .15s ease;
+  }
+  .btn-primary:hover{background:var(--purple-dark);}
 
-  .view .mesh-blob{
-    position: absolute;
-    z-index: 0;
-    border-radius: 50%;
-    filter: blur(70px);
-    pointer-events: none;
-  }
-  .view .mesh-blob.blob-pink{
-    top: -12%;
-    right: -8%;
-    width: 46vw;
-    height: 46vw;
-    max-width: 620px;
-    max-height: 620px;
-    background: radial-gradient(circle at 35% 35%, #ffffff, #d8d8d8 60%, transparent 75%);
-    opacity: 0.5;
-  }
-  .view .mesh-blob.blob-blue{
-    bottom: -14%;
-    left: -10%;
-    width: 42vw;
-    height: 42vw;
-    max-width: 560px;
-    max-height: 560px;
-    background: radial-gradient(circle at 60% 40%, #ffffff, #c9c9c9 60%, transparent 75%);
-    opacity: 0.5;
-  }
-
-  /* ---------- Home view ---------- */
-  .stage{
-    position:relative;
-    z-index:2;
+  /* Hero — vertically centered to fill the screen */
+  .hero{
+    text-align:center;
+    max-width:680px;
+    width:100%;
+    margin:0 auto;
+    padding:40px 0;
+    flex:1;
     display:flex;
     flex-direction:column;
     align-items:center;
+    justify-content:center;
+    animation:pop .18s ease;
+  }
+  .count-pill{
+    display:inline-block;
+    font-size:12.5px;
+    color:var(--purple);
+    background:var(--purple-tint);
+    padding:6px 14px;
+    border-radius:999px;
+    font-weight:600;
+    margin-bottom:18px;
+  }
+  .hero h1{
+    font-size:clamp(38px, 6vw, 58px);
+    font-weight:800;
+    margin:0 0 12px;
+    letter-spacing:-0.03em;
+    line-height:1.05;
+  }
+  .hero h1 span{color:var(--purple);}
+  .hero p{
+    margin:0 0 26px;
+    color:var(--muted);
+    font-size:16px;
+    line-height:1.6;
+  }
+  .hero-cta{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;}
+  .hero-cta .btn-primary, .hero-cta .btn-secondary{font-size:14px;padding:13px 26px;}
+
+  footer{
+    margin-top:44px;
+    padding-top:20px;
+    border-top:1px solid var(--border);
     text-align:center;
+    font-size:12.5px;color:var(--muted);
   }
-
-  .eyebrow{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 0.68rem;
-    letter-spacing: 0.42em;
-    text-transform: uppercase;
-    color: var(--brass-dim);
-    margin-bottom: 1.6rem;
-  }
-
-  h1{
-    font-family:'Fraunces', serif;
-    font-weight: 500;
-    font-size: clamp(3.2rem, 9vw, 6.4rem);
-    letter-spacing: -0.01em;
-    line-height: 1;
-    color: var(--ink);
-  }
-  h1 span, h1 em{
-    color: var(--brass);
-    font-style: italic;
-    font-weight: 300;
-  }
-
-  .tagline{
-    margin-top: 1.1rem;
-    font-size: 0.98rem;
-    color: var(--ink-dim);
-    letter-spacing: 0.02em;
-    max-width: 30ch;
-  }
-
-  .auth{
-    position: fixed;
-    top: 2.4rem;
-    right: 2.6rem;
-    z-index: 3;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .auth a,
-  .auth button{
-    font-family: 'Fraunces', serif;
-    font-weight: 500;
-    font-size: 0.82rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    text-decoration: none;
-    padding: 0.65rem 1.5rem;
-    border: 1px solid var(--hairline);
-    border-radius: 1px;
-    cursor: pointer;
-    background: transparent;
-    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-  }
-
-  .auth .login{
-    color: var(--ink);
-  }
-  .auth .login:hover{
-    border-color: var(--brass);
-    color: var(--brass);
-  }
-
-  .auth .register{
-    color: var(--bg);
-    background: var(--brass);
-    border-color: var(--brass);
-  }
-  .auth .register:hover{
-    background: transparent;
-    color: var(--brass);
-  }
-
-  @media (max-width: 640px){
-    .auth{ top: 1.4rem; right: 1.4rem; gap: 0.7rem; }
-    .auth a{ font-size: 0.72rem; padding: 0.55rem 1.1rem; }
-  }
-
-  /* ---------- Login view ---------- */
-  .home-link{
-    position: fixed;
-    top: 2.4rem;
-    left: 2.6rem;
-    z-index: 3;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.68rem;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--brass-dim);
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    background: none;
-    border: none;
-    transition: color 0.2s ease;
-  }
-  .home-link:hover{ color: var(--brass); }
-  .home-link svg{ width: 13px; height: 13px; }
-
-  .panel{
-    width: 100%;
-    max-width: 368px;
-  }
-
-  .panel .eyebrow{ margin-bottom: 1.4rem; }
-
-  .panel h1{
-    font-size: clamp(2.2rem, 6vw, 2.7rem);
-    line-height: 1.05;
-  }
-
-  .sub{
-    margin-top: 0.7rem;
-    font-size: 0.9rem;
-    color: var(--ink-dim);
-    text-align: center;
-    letter-spacing: 0.01em;
-  }
-
-  form{
-    margin-top: 2.6rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.3rem;
-  }
-
-  .field{
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-  }
-
-  .field label{
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.64rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--brass-dim);
-  }
-
-  .field-input{
-    position: relative;
-  }
-
-  .field input{
-    width: 100%;
-    background: transparent;
-    border: 1px solid var(--hairline);
-    border-radius: 1px;
-    padding: 0.85rem 1rem;
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.92rem;
-    color: var(--ink);
-    outline: none;
-    transition: border-color 0.2s ease, background 0.2s ease;
-  }
-
-  .field input::placeholder{
-    color: rgba(228,232,222,0.35);
-  }
-
-  .field input:focus{
-    border-color: var(--brass);
-    background: rgba(255,255,255,0.03);
-  }
-
-  .field input:focus-visible{
-    outline: 1px solid var(--brass);
-    outline-offset: 2px;
-  }
-
-  .field.error input{
-    border-color: var(--error);
-  }
-
-  .error-msg{
-    font-size: 0.76rem;
-    color: var(--error);
-    display: none;
-    letter-spacing: 0.01em;
-  }
-  .field.error .error-msg{ display: block; }
-
-  .toggle-visibility{
-    position: absolute;
-    right: 0.9rem;
-    top: 50%;
-    transform: translateY(-50%);
-    background: none;
-    border: none;
-    color: var(--brass-dim);
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    cursor: pointer;
-    padding: 0.3rem;
-    transition: color 0.2s ease;
-  }
-  .toggle-visibility:hover{ color: var(--brass); }
-
-  .row-between{
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    margin-top: -0.4rem;
-  }
-
-  .forgot{
-    font-size: 0.78rem;
-    color: var(--brass-dim);
-    text-decoration: none;
-    letter-spacing: 0.01em;
-    border-bottom: 1px solid transparent;
-    transition: color 0.2s ease, border-color 0.2s ease;
-  }
-  .forgot:hover{
-    color: var(--brass);
-    border-color: var(--hairline);
-  }
-
-  .submit{
-    margin-top: 0.6rem;
-    width: 100%;
-    font-family: 'Fraunces', serif;
-    font-weight: 500;
-    font-size: 0.86rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--bg);
-    background: var(--brass);
-    border: 1px solid var(--brass);
-    border-radius: 1px;
-    padding: 0.9rem 1.5rem;
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease;
-  }
-  .submit:hover{
-    background: transparent;
-    color: var(--brass);
-  }
-  .submit:disabled{
-    opacity: 0.55;
-    cursor: default;
-    background: var(--brass);
-    color: var(--bg);
-  }
-
-  .register-line{
-    margin-top: 1.9rem;
-    text-align: center;
-    font-size: 0.85rem;
-    color: var(--ink-dim);
-  }
-  .register-line button{
-    background: none;
-    border: none;
-    font-family: inherit;
-    font-size: inherit;
-    color: var(--brass);
-    text-decoration: none;
-    border-bottom: 1px solid var(--hairline);
-    cursor: pointer;
-    padding: 0;
-  }
-  .register-line button:hover{ border-color: var(--brass); }
-
-  @media (max-width: 480px){
-    .home-link{ top: 1.4rem; left: 1.4rem; }
-    .panel{ max-width: 100%; }
+  @media (max-width:600px){
+    .hero h1{font-size:34px;}
+    .nav{margin-bottom:30px;}
   }
 </style>
 </head>
 <body>
-  <section id="homeView" class="view active">
-    <div class="mesh-blob blob-pink"></div>
-    <div class="mesh-blob blob-blue"></div>
-    <nav class="auth">
-      <a class="login" href="/login">Log In</a>
-      <a class="register" href="/register">Register</a>
-    </nav>
+<div class="wrap">
 
-    <main class="stage">
-      <div class="eyebrow">Your Data &middot; Your Vault &middot; Your Control</div>
-      <h1>Nex<span>Vault</span></h1>
-      <p class="tagline">Protection Beyond Storage</p>
-    </main>
-  </section>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="logo">🔒</span><span>Secure <span class="accent">Vault</span></span></a>
+    <div class="nav-actions">
+      <button type="button" class="theme-btn" id="themeBtn">☀️ Light</button>
+      <a href="/login" class="btn-secondary">Log in</a>
+      <a href="/register" class="btn-primary">Create account</a>
+    </div>
+  </nav>
 
+  <div class="hero">
+    <span class="count-pill">🔐 AES-encrypted · Private by default</span>
+    <h1>Your vault for <span>everything important</span></h1>
+    <p>Store identity docs, finance files, health records and quick notes — organized in folders, encrypted, and searchable from one clean dashboard.</p>
+    <div class="hero-cta">
+      <a href="/register" class="btn-primary">Get started →</a>
+    </div>
+  </div>
+
+  <footer>
+    <span>🔒 Secure Vault System</span>
+  </footer>
+
+</div>
+
+<script>
+  // Theme — synced with dashboard / auth pages via vault_theme
+  const themeBtn = document.getElementById('themeBtn');
+  function applyTheme(t){
+    if(t === 'light'){
+      document.documentElement.setAttribute('data-theme', 'light');
+      themeBtn.textContent = '🌙 Dark';
+    } else {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      themeBtn.textContent = '☀️ Light';
+    }
+    localStorage.setItem('vault_theme', t);
+  }
+  (function initTheme(){
+    applyTheme(localStorage.getItem('vault_theme') || 'dark');
+  })();
+  themeBtn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    applyTheme(cur === 'light' ? 'dark' : 'light');
+  });
+</script>
 </body>
 </html>

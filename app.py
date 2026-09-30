@@ -32,6 +32,100 @@ login_manager = LoginManager()
 
 ALLOWED_FOLDERS = ['Identity', 'Finance', 'Health', 'Legal', 'Property', 'Misc']
 
+# --- Login lockout policy (ported from time.py) ---
+MAX_ATTEMPTS = 6
+INITIAL_LOCKOUT = 30  # seconds
+LOCKOUT_MULTIPLIER = 2
+# In-memory tracker: key -> {"count": int, "lockout_until": float,
+#                            "lockout_duration": int, "round_number": int}
+_login_attempts = {}
+
+
+def _lockout_key(login_id, ip_address):
+    """Build a tracker key from IP + login id (mirrors time.py's per-password rounds)."""
+    lid = (login_id or "").strip().lower() or "anonymous"
+    return f"{ip_address or 'unknown'}:{lid}"
+
+
+def _get_lockout_remaining(key):
+    """Return seconds remaining in lockout, or 0 if not locked. Cleans up expired locks."""
+    state = _login_attempts.get(key)
+    if not state:
+        return 0
+    until = state.get("lockout_until", 0) or 0
+    if not until:
+        return 0  # no active lock — do NOT reset count here
+    remaining = int(until - time.time())
+    if remaining <= 0:
+        # Lock expired -> start next round, reset attempt counter (time.py behaviour)
+        state["count"] = 0
+        state["lockout_until"] = 0
+        return 0
+    return remaining
+
+
+def _record_failed_attempt(key):
+    """Record a failed login. Returns (locked_now: bool, remaining: int, state: dict).
+
+    Mirrors time.py exactly:
+      Round 1: 6 fails -> lock 30s -> next 60s
+      Round 2: 6 fails -> lock 60s -> next 120s
+      Round N: lock INITIAL * (MULTIPLIER ** (N-1))
+    """
+    now = time.time()
+    state = _login_attempts.setdefault(key, {
+        "count": 0,
+        "lockout_until": 0,
+        "lockout_duration": INITIAL_LOCKOUT,
+        "round_number": 1,
+        "last_locked_for": 0,
+        "last_locked_round": 0,
+    })
+    state["count"] += 1
+    if state["count"] >= MAX_ATTEMPTS:
+        locked_round = state["round_number"]  # the round that just finished (time.py)
+        locked_for = state["lockout_duration"]  # time for THIS lock
+        state["lockout_until"] = now + locked_for
+        state["last_locked_for"] = locked_for
+        state["last_locked_round"] = locked_round
+        # Prepare next round with exponential backoff (time.py: lockout_duration *= 2)
+        state["lockout_duration"] *= LOCKOUT_MULTIPLIER
+        state["round_number"] += 1
+        state["count"] = 0  # reset for next round after lock expires
+        return True, locked_for, state
+    return False, 0, state
+
+
+def _lockout_display(key):
+    """Build display values exactly matching time.py timing.
+
+    Returns dict with: display_round, lockout_total, next_lockout, remaining.
+    """
+    state = _login_attempts.get(key, {})
+    remaining = _get_lockout_remaining(key)
+    # If currently locked, show the round that caused the lock
+    display_round = state.get("last_locked_round") or max(1, state.get("round_number", 1) - (1 if remaining else 0))
+    if remaining and not state.get("last_locked_round"):
+        # Fallback for locks created before last_locked_* existed
+        display_round = max(1, state.get("round_number", 2) - 1)
+    lockout_total = state.get("last_locked_for") or INITIAL_LOCKOUT
+    if remaining and not state.get("last_locked_for"):
+        # lockout_duration was already doubled, so halve to get current total
+        lockout_total = max(INITIAL_LOCKOUT, state.get("lockout_duration", INITIAL_LOCKOUT * 2) // LOCKOUT_MULTIPLIER)
+    next_lockout = state.get("lockout_duration", INITIAL_LOCKOUT * LOCKOUT_MULTIPLIER if remaining else INITIAL_LOCKOUT)
+    return {
+        "state": state,
+        "remaining": remaining,
+        "display_round": display_round,
+        "lockout_total": lockout_total,
+        "next_lockout": next_lockout,
+    }
+
+
+def _reset_lockout(key):
+    """Clear tracker on successful login (time.py: 'Access granted!' -> return)."""
+    _login_attempts.pop(key, None)
+
 
 def create_app():
     # Automatically locate templates whether uploaded inside templates/ or directly in root
@@ -136,9 +230,40 @@ def create_app():
             return redirect(url_for("dashboard"))
 
         errors = []
+        # Defaults for template (ported from time.py)
+        lockout_remaining = 0
+        attempts_remaining = MAX_ATTEMPTS
+        # Pre-fill key from query or last typed value so GET can show lockout too
+        preview_id = (request.form.get("email") if request.method == "POST" else request.args.get("email", "")) or ""
+        preview_key = _lockout_key(preview_id, request.remote_addr)
+        if preview_id:
+            lockout_remaining = _get_lockout_remaining(preview_key)
+            state = _login_attempts.get(preview_key)
+            if state:
+                attempts_remaining = max(0, MAX_ATTEMPTS - state.get("count", 0))
+
         if request.method == "POST":
             login_id = (request.form.get("email") or "").strip()
             password = request.form.get("password") or ""
+            key = _lockout_key(login_id, request.remote_addr)
+
+            # 1) Check active lockout first (time.py: "Too many failed attempts...")
+            disp = _lockout_display(key)
+            lockout_remaining = disp["remaining"]
+            if lockout_remaining > 0:
+                errors.append(
+                    f"Too many failed attempts. Try again in {lockout_remaining} seconds."
+                )
+                return render_template(
+                    "login.html",
+                    errors=errors,
+                    lockout_remaining=lockout_remaining,
+                    lockout_total=disp["lockout_total"],
+                    next_lockout=disp["next_lockout"],
+                    attempts_remaining=0,
+                    max_attempts=MAX_ATTEMPTS,
+                    round_number=disp["display_round"],
+                )
 
             if not login_id:
                 errors.append("Email or Username is required")
@@ -147,10 +272,11 @@ def create_app():
 
             if not errors:
                 user = User.query.filter(
-                    (func.lower(User.email) == login_id.lower()) | 
+                    (func.lower(User.email) == login_id.lower()) |
                     (func.lower(User.username) == login_id.lower())
                 ).first()
                 if user and check_password_hash(user.password_hash, password):
+                    _reset_lockout(key)  # time.py: "Access granted!" -> return
                     login_user(user)
 
                     # Log successful login
@@ -170,11 +296,12 @@ def create_app():
                     flash("Logged in successfully!", "success")
                     return redirect(url_for("dashboard"))
                 else:
-                    errors.append("Invalid email or password")
+                    # 2) Wrong password -> count attempt (time.py inner loop)
+                    locked_now, locked_for, state = _record_failed_attempt(key)
                     try:
                         log = SecurityLog(
                             user_id=user.id if user else None,
-                            login_id=email,
+                            login_id=login_id,
                             ip_address=request.remote_addr,
                             status="FAILED",
                             user_agent=request.user_agent.string
@@ -184,7 +311,56 @@ def create_app():
                     except Exception:
                         db.session.rollback()
 
-        return render_template("login.html", errors=errors)
+                    if locked_now:
+                        lockout_remaining = locked_for
+                        disp2 = _lockout_display(key)
+                        errors.append(
+                            f"Too many failed attempts. Locked for {locked_for} seconds."
+                        )
+                    else:
+                        attempts_remaining = max(0, MAX_ATTEMPTS - state.get("count", 0))
+                        errors.append(
+                            f"Invalid email or password. Attempts remaining: {attempts_remaining}"
+                        )
+                        lockout_remaining = 0
+                        disp2 = {"lockout_total": locked_for or INITIAL_LOCKOUT,
+                                 "next_lockout": state.get("lockout_duration", INITIAL_LOCKOUT),
+                                 "display_round": state.get("round_number", 1)}
+
+                    return render_template(
+                        "login.html",
+                        errors=errors,
+                        lockout_remaining=lockout_remaining,
+                        lockout_total=disp2["lockout_total"] if locked_now else INITIAL_LOCKOUT,
+                        next_lockout=disp2["next_lockout"],
+                        attempts_remaining=attempts_remaining if not locked_now else 0,
+                        max_attempts=MAX_ATTEMPTS,
+                        round_number=disp2["display_round"] if locked_now else state.get("round_number", 1),
+                    )
+
+        if preview_id and lockout_remaining > 0:
+            disp0 = _lockout_display(preview_key)
+            return render_template(
+                "login.html",
+                errors=errors,
+                lockout_remaining=lockout_remaining,
+                lockout_total=disp0["lockout_total"],
+                next_lockout=disp0["next_lockout"],
+                attempts_remaining=0,
+                max_attempts=MAX_ATTEMPTS,
+                round_number=disp0["display_round"],
+            )
+        state = _login_attempts.get(preview_key, {}) if preview_id else {}
+        return render_template(
+            "login.html",
+            errors=errors,
+            lockout_remaining=0,
+            lockout_total=INITIAL_LOCKOUT,
+            next_lockout=state.get("lockout_duration", INITIAL_LOCKOUT) if state else INITIAL_LOCKOUT,
+            attempts_remaining=attempts_remaining,
+            max_attempts=MAX_ATTEMPTS,
+            round_number=state.get("round_number", 1) if state else 1,
+        )
 
     @app.route("/logout")
     @login_required
