@@ -1,6 +1,11 @@
 import os
-import smtplib
+import ssl
+import json
 import logging
+import smtplib
+import socket
+import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -8,27 +13,90 @@ from email.mime.text import MIMEText
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-def send_password_reset_email(to_email: str, reset_url: str) -> bool:
+
+class EmailResult:
+    """Wrapper that acts as a boolean and a tuple (success, message)."""
+    def __init__(self, success: bool, message: str = ""):
+        self.success = bool(success)
+        self.message = str(message)
+
+    def __bool__(self):
+        return self.success
+
+    def __iter__(self):
+        return iter((self.success, self.message))
+
+    def __repr__(self):
+        return f"EmailResult(success={self.success}, message={self.message!r})"
+
+
+def _send_via_resend(api_key: str, to_email: str, subject: str, html_content: str, text_content: str, sender: str) -> tuple[bool, str]:
+    """Sends email via Resend HTTP API (Port 443 - works on Render Free Tier)."""
+    url = "https://api.resend.com/emails"
+    from_email = sender if ("@" in sender and not sender.endswith(".local") and "gmail.com" not in sender) else "Secure Vault <onboarding@resend.dev>"
+    payload = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "html": html_content,
+        "text": text_content,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+        "User-Agent": "SecureVault/1.0"
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status in (200, 201):
+                return True, "Email sent successfully via Resend API"
+            return False, f"Resend API returned HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        return False, f"Resend API error ({e.code}): {err_body}"
+    except Exception as e:
+        return False, f"Resend request failed: {e}"
+
+
+def _send_via_brevo(api_key: str, to_email: str, subject: str, html_content: str, text_content: str, sender: str) -> tuple[bool, str]:
+    """Sends email via Brevo HTTP API (Port 443 - works on Render Free Tier)."""
+    url = "https://api.brevo.com/v3/smtp/email"
+    sender_email = sender if ("@" in sender and not sender.endswith(".local")) else "admin@securevault.com"
+    payload = {
+        "sender": {"name": "Secure Vault System", "email": sender_email},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
+    headers = {
+        "api-key": api_key.strip(),
+        "Content-Type": "application/json",
+        "User-Agent": "SecureVault/1.0"
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status in (200, 201):
+                return True, "Email sent successfully via Brevo API"
+            return False, f"Brevo API returned HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        return False, f"Brevo API error ({e.code}): {err_body}"
+    except Exception as e:
+        return False, f"Brevo request failed: {e}"
+
+
+def send_password_reset_email(to_email: str, reset_url: str) -> EmailResult:
     """
-    Sends a secure password reset link to the user's email address via SMTP (e.g. Gmail).
-    Includes automatic TLS/SSL fallback for maximum reliability across cloud hosting environments.
+    Sends a secure password reset link to the user's email address.
+    Supports:
+      1. HTTP-based APIs (Resend, Brevo) over Port 443 (Recommended for Render Free Tier).
+      2. Gmail / SMTP over Port 587 (STARTTLS) or Port 465 (SSL).
     """
     to_email = (to_email or "").strip()
-    mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com").strip()
-    mail_port = int(os.environ.get("MAIL_PORT", 587))
-    mail_username = (os.environ.get("MAIL_USERNAME") or "").strip()
-    mail_password = (os.environ.get("MAIL_PASSWORD") or "").replace(" ", "").strip()
-    mail_sender = os.environ.get("MAIL_DEFAULT_SENDER", mail_username or "noreply@securevault.local").strip()
-
-    if not mail_username or not mail_password:
-        print("[!] EMAIL ERROR: MAIL_USERNAME or MAIL_PASSWORD not configured. Please set them in Render Environment Variables or .env")
-        logger.warning("MAIL_USERNAME or MAIL_PASSWORD not configured. Skipping email dispatch.")
-        return False
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Reset Your Password · Secure Vault System"
-    msg["From"] = f"Secure Vault System <{mail_sender}>"
-    msg["To"] = to_email
+    subject = "Reset Your Password · Secure Vault System"
 
     # Plain text fallback
     text_content = f"""Hello,
@@ -87,36 +155,121 @@ Secure Vault Security Team
 </html>
 """
 
+    # 1. Try Resend HTTP API if configured (Port 443, guaranteed to work on Render Free Tier)
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if resend_key:
+        sender = os.environ.get("MAIL_DEFAULT_SENDER", "").strip()
+        success, msg = _send_via_resend(resend_key, to_email, subject, html_content, text_content, sender)
+        if success:
+            print(f"[+] Password reset email sent via Resend API to {to_email}")
+            return EmailResult(True, msg)
+        print(f"[!] Resend API failed: {msg}. Falling back to SMTP if configured...")
+
+    # 2. Try Brevo HTTP API if configured
+    brevo_key = (os.environ.get("BREVO_API_KEY") or os.environ.get("SENDINBLUE_API_KEY") or "").strip()
+    if brevo_key:
+        sender = os.environ.get("MAIL_DEFAULT_SENDER", "").strip()
+        success, msg = _send_via_brevo(brevo_key, to_email, subject, html_content, text_content, sender)
+        if success:
+            print(f"[+] Password reset email sent via Brevo API to {to_email}")
+            return EmailResult(True, msg)
+        print(f"[!] Brevo API failed: {msg}. Falling back to SMTP if configured...")
+
+    # 3. SMTP configuration (Gmail or custom SMTP)
+    mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com").strip()
+    mail_port = int(os.environ.get("MAIL_PORT", 587))
+    mail_username = (os.environ.get("MAIL_USERNAME") or "").strip()
+    mail_password = (os.environ.get("MAIL_PASSWORD") or "").replace(" ", "").strip()
+    
+    # For Gmail, the sender MUST match the authenticated Gmail username to prevent spam flagging
+    mail_sender = (os.environ.get("MAIL_DEFAULT_SENDER") or "").strip()
+    if not mail_sender or "noreply@securevault.local" in mail_sender or "gmail.com" in mail_server.lower():
+        mail_sender = mail_username or "noreply@securevault.local"
+
+    if not mail_username or not mail_password:
+        err_msg = (
+            "MAIL_USERNAME or MAIL_PASSWORD not configured. "
+            "Please set MAIL_USERNAME and MAIL_PASSWORD (16-character Google App Password) in your Render Environment Variables. "
+            "Alternatively, add RESEND_API_KEY to send emails via HTTP without SMTP port restrictions."
+        )
+        print("\n" + "=" * 70)
+        print("  [!] EMAIL CONFIGURATION ERROR")
+        print("=" * 70)
+        print("  " + err_msg)
+        print("=" * 70 + "\n", flush=True)
+        logger.warning(err_msg)
+        return EmailResult(False, err_msg)
+
+    # Build MIME message
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"Secure Vault System <{mail_sender}>"
+    msg["To"] = to_email
     msg.attach(MIMEText(text_content, "plain"))
     msg.attach(MIMEText(html_content, "html"))
 
-    # Primary attempt
+    # Ports to attempt
     ports_to_try = [mail_port]
-    # Add fallback port
     fallback_port = 465 if mail_port == 587 else 587
-    ports_to_try.append(fallback_port)
+    if fallback_port not in ports_to_try:
+        ports_to_try.append(fallback_port)
 
+    ssl_context = ssl.create_default_context()
     last_error = None
+
     for port in ports_to_try:
         try:
+            print(f"[*] Attempting SMTP delivery to {mail_server}:{port}...")
             if port == 465:
-                with smtplib.SMTP_SSL(mail_server, port, timeout=15) as server:
+                with smtplib.SMTP_SSL(mail_server, port, timeout=8, context=ssl_context) as server:
+                    server.ehlo()
                     server.login(mail_username, mail_password)
                     server.sendmail(mail_sender, [to_email], msg.as_string())
             else:
-                with smtplib.SMTP(mail_server, port, timeout=15) as server:
-                    server.starttls()
+                with smtplib.SMTP(mail_server, port, timeout=8) as server:
+                    server.ehlo()
+                    server.starttls(context=ssl_context)
+                    server.ehlo()
                     server.login(mail_username, mail_password)
                     server.sendmail(mail_sender, [to_email], msg.as_string())
 
-            print(f"[+] Password reset email sent successfully to {to_email} via port {port}")
-            logger.info(f"Password reset email sent successfully to {to_email} via port {port}")
-            return True
+            print(f"[+] Password reset email successfully sent to {to_email} via {mail_server}:{port}!")
+            return EmailResult(True, f"Email sent via {mail_server}:{port}")
+
+        except smtplib.SMTPAuthenticationError as e:
+            err_msg = (
+                "Gmail rejected your credentials (535 Authentication Failed). "
+                "Ensure you are using a 16-character Google App Password (not your regular Gmail password) "
+                "and 2-Step Verification is active on your Google account. "
+                "Visit: https://myaccount.google.com/apppasswords"
+            )
+            print("\n" + "=" * 70)
+            print("  [!] GMAIL AUTHENTICATION ERROR")
+            print("=" * 70)
+            print("  " + err_msg)
+            print("=" * 70 + "\n", flush=True)
+            return EmailResult(False, err_msg)
+
+        except (socket.timeout, TimeoutError, smtplib.SMTPConnectError, OSError) as e:
+            last_error = e
+            print(f"[!] SMTP connection on port {port} failed: {e}")
+
         except Exception as e:
             last_error = e
-            print(f"[!] SMTP dispatch on port {port} failed: {e}. Trying fallback if available...")
-            logger.warning(f"SMTP dispatch on port {port} failed: {e}")
+            print(f"[!] SMTP error on port {port}: {e}")
 
-    print(f"[!] EMAIL ERROR: All attempts to send password reset email to {to_email} failed. Last error: {last_error}")
-    logger.error(f"Failed to send password reset email to {to_email}: {last_error}", exc_info=True)
-    return False
+    # If all SMTP connection attempts failed
+    diagnostic_msg = (
+        f"SMTP connection to {mail_server} timed out or failed ({last_error}). "
+        "Render Free Tier blocks outbound SMTP ports (25, 465, 587). "
+        "To resolve this, set RESEND_API_KEY in Render Environment Variables (free at https://resend.com, works over HTTP 443), "
+        "or upgrade Render to a paid plan."
+    )
+
+    print("\n" + "=" * 70)
+    print("  [!] SMTP DELIVERY FAILED (RENDER FIREWALL)")
+    print("=" * 70)
+    print("  " + diagnostic_msg)
+    print("=" * 70 + "\n", flush=True)
+
+    return EmailResult(False, diagnostic_msg)

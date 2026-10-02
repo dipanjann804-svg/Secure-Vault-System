@@ -142,6 +142,15 @@ def create_app():
         db_uri = db_uri.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = db_uri or "sqlite:///app.db"
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    if os.environ.get("RENDER") and not db_uri:
+        print("\n" + "=" * 70, flush=True)
+        print("  [!] WARNING: RUNNING WITH SQLITE ON RENDER", flush=True)
+        print("=" * 70, flush=True)
+        print("  Render free instances use ephemeral disks.", flush=True)
+        print("  User accounts will be erased whenever the instance spins down or redeploys!", flush=True)
+        print("  To persist data permanently, attach a PostgreSQL database and set DATABASE_URL.", flush=True)
+        print("=" * 70 + "\n", flush=True)
     
     # Uploads configuration
     upload_folder = os.path.join(app.root_path, 'uploads')
@@ -415,17 +424,29 @@ def create_app():
                     token = s.dumps(user.email, salt="password-reset-salt")
                     base_url = get_base_url()
                     reset_link = f"{base_url}/reset-password/{token}"
-                    sent = send_password_reset_email(user.email, reset_link)
-                    if not sent:
-                        print(f"[!] Email dispatch failed for: {user.email}")
-                else:
-                    print(f"[!] Password reset requested but email NOT found in database: {email}. Make sure the user is registered on this instance.")
+                    print(f"\n[+] PASSWORD RESET LINK for {user.email}: {reset_link}\n", flush=True)
 
-                flash(
-                    "If an account exists with that email address, a password reset link has been sent to your email inbox.",
-                    "success"
-                )
-                return redirect(url_for("login"))
+                    result = send_password_reset_email(user.email, reset_link)
+                    if result:
+                        flash(
+                            "A password reset link has been sent to your email inbox! (Please check your Spam or Junk folder if you do not see it).",
+                            "success"
+                        )
+                        return redirect(url_for("login"))
+                    else:
+                        print(f"[!] Email dispatch failed for {user.email}: {result.message}")
+                        flash(
+                            f"Email delivery error: {result.message}",
+                            "error"
+                        )
+                        return redirect(url_for("forgot_password"))
+                else:
+                    print(f"[!] Password reset requested but email NOT found in database: {email}. Note: If using SQLite on Render Free tier, restarting/sleeping the instance wipes local databases.")
+                    flash(
+                        "If an account exists with that email address, a password reset link has been sent to your email inbox.",
+                        "success"
+                    )
+                    return redirect(url_for("login"))
 
         return render_template("forgot_password.html", errors=errors)
 
