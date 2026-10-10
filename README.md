@@ -35,14 +35,20 @@ Secure-Vault-System/
 ├── requirements.txt
 ├── Procfile             # production process file
 ├── .env.example         # environment variable template
-├── index.html           # landing page (/)
-├── login.html           # login page (/login)
-├── register.html        # registration page (/register)
-├── forgot_password.html # reset request (/forgot-password)
-├── reset_password.html  # set new password (/reset-password/<token>)
-├── change_password.html # change password (/change-password)
-├── dashboard.html       # main vault UI (/dashboard)
-├── base.html            # legacy base layout
+├── templates/           # Jinja2 pages
+│   ├── index.html       # landing page (/)
+│   ├── login.html       # login page (/login)
+│   ├── register.html    # registration page (/register)
+│   ├── forgot_password.html # reset request (/forgot-password)
+│   ├── reset_password.html  # set new password (/reset-password/<token>)
+│   ├── change_password.html # change password (/change-password)
+│   ├── dashboard.html       # main vault UI (/dashboard)
+│   └── base.html            # legacy base layout
+├── static/
+│   └── js/
+│       └── alert.js     # demo JS (not required by app)
+├── utils/
+│   └── time.py          # lockout prototype (logic ported into app.py)
 └── uploads/             # uploaded files + avatars (created at runtime)
 ```
 

@@ -331,7 +331,7 @@
       </div>
 
       {% if lockout_remaining and lockout_remaining > 0 %}
-        <button type="submit" class="btn-primary locked" id="submitBtn" data-remaining="{{ lockout_remaining }}" disabled>Locked ({{ lockout_remaining }}s)…</button>
+        <button type="submit" class="btn-primary locked" id="submitBtn" data-remaining="{{ lockout_remaining }}" disabled>{{ lockout_remaining }}</button>
       {% else %}
         <button type="submit" class="btn-primary" id="submitBtn">Log in →</button>
       {% endif %}
@@ -412,7 +412,7 @@
       passwordInput.disabled = true;
       btn.disabled = true;
       btn.classList.add('locked');
-      btn.textContent = 'Locked (' + remaining + 's)…';
+      btn.textContent = '' + remaining;
       if(toggleBtn) toggleBtn.disabled = true;
     } catch(e) {}
 
@@ -431,7 +431,7 @@
         } catch(e) {}
         return;
       }
-      try { btn.textContent = 'Locked (' + remaining + 's)…'; } catch(e) {}
+      try { btn.textContent = '' + remaining; } catch(e) {}
     }, 1000);
   }
   if(document.readyState === 'loading'){
