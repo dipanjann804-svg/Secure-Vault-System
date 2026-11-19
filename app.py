@@ -20,7 +20,7 @@ from flask_login import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
-from sqlalchemy import text, func
+from sqlalchemy import text, func, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
 
@@ -30,7 +30,10 @@ from email_service import send_password_reset_email
 
 login_manager = LoginManager()
 
-ALLOWED_FOLDERS = ['Identity', 'Finance', 'Health', 'Legal', 'Property', 'Misc']
+# Built-in folders shown by default. Users can create more by naming their own
+# folder from the "Add files" tile on the dashboard.
+ALLOWED_FOLDERS = ['Identity', 'Finance', 'Health', 'Legal']
+FALLBACK_FOLDER = 'My Files'
 
 # --- Login lockout policy (ported from time.py) ---
 MAX_ATTEMPTS = 6
@@ -127,10 +130,64 @@ def _reset_lockout(key):
     _login_attempts.pop(key, None)
 
 
+def _clean_folder_name(value):
+    """Normalize a user-supplied folder name (used by custom 'Add files' folders)."""
+    name = re.sub(r"\s+", " ", (value or "").strip())
+    name = name[:50].strip()
+    return name or FALLBACK_FOLDER
+
+
+def _sync_schema():
+    """Add columns that were introduced in models.py after the database was created.
+
+    db.create_all() only creates *missing tables*; it never alters an existing
+    table. An older app.db (created before the profile fields were added to
+    User) would therefore fail with "no such column: user.name". This adds any
+    missing columns in place without touching existing rows.
+    """
+    inspector = sa_inspect(db.engine)
+    existing_tables = set(inspector.get_table_names())
+    preparer = db.engine.dialect.identifier_preparer
+
+    for table in db.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing_columns:
+                continue
+            # A populated table can only gain a column that is nullable or has a default.
+            if not column.nullable and column.default is None and column.server_default is None:
+                print(
+                    f"[!] Skipping {table.name}.{column.name}: NOT NULL with no default",
+                    flush=True,
+                )
+                continue
+            try:
+                ddl = (
+                    f"ALTER TABLE {preparer.quote(table.name)} "
+                    f"ADD COLUMN {preparer.quote(column.name)} "
+                    f"{column.type.compile(dialect=db.engine.dialect)}"
+                )
+                with db.engine.begin() as conn:
+                    conn.execute(text(ddl))
+                print(f"[+] Added missing column {table.name}.{column.name}", flush=True)
+            except Exception as e:
+                print(
+                    f"[!] Could not add column {table.name}.{column.name}: {e}",
+                    flush=True,
+                )
+
+
 def create_app():
     # Automatically locate templates whether uploaded inside templates/ or directly in root
+    # (check both lower/upper case so it also works on case-sensitive Linux hosts)
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    tpl_dir = 'templates' if os.path.isdir(os.path.join(root_dir, 'templates')) else '.'
+    tpl_dir = '.'
+    for candidate in ('templates', 'Templates'):
+        if os.path.isdir(os.path.join(root_dir, candidate)):
+            tpl_dir = candidate
+            break
     app = Flask(__name__, template_folder=tpl_dir)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
@@ -165,6 +222,7 @@ def create_app():
     with app.app_context():
         try:
             db.create_all()
+            _sync_schema()
         except Exception as e:
             print(f"[!] Warning during db.create_all: {e}")
 
@@ -529,8 +587,16 @@ def create_app():
                 "created_at": n.created_at.strftime("%Y-%m-%d %H:%M") if n.created_at else ""
             })
 
+        # Build the folder list: built-in folders plus any custom folders the user
+        # created through "Add files" (inferred from their uploaded documents).
+        custom_folders = sorted({
+            doc.folder for doc in documents
+            if doc.folder and doc.folder not in ALLOWED_FOLDERS
+        })
+        folders = ALLOWED_FOLDERS + custom_folders
+
         # Calculate counts per folder
-        folder_counts = {folder: 0 for folder in ALLOWED_FOLDERS}
+        folder_counts = {folder: 0 for folder in folders}
         for doc in documents:
             if doc.folder in folder_counts:
                 folder_counts[doc.folder] += 1
@@ -540,7 +606,7 @@ def create_app():
             user=current_user,
             documents=documents,
             notes=notes,
-            folders=ALLOWED_FOLDERS,
+            folders=folders,
             folder_counts=folder_counts
         )
 
@@ -548,9 +614,7 @@ def create_app():
     @app.route("/documents/upload", methods=["POST"])
     @login_required
     def upload_document():
-        folder = request.form.get("folder", "Misc")
-        if folder not in ALLOWED_FOLDERS:
-            folder = "Misc"
+        folder = _clean_folder_name(request.form.get("folder"))
 
         files = request.files.getlist("files") or request.files.getlist("file")
         if not files or all(f.filename == '' for f in files):

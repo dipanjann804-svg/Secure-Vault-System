@@ -234,6 +234,14 @@
   .photo-btn.remove{background:#FDEAEA; color:#D9433B;}
   .photo-btn.remove:hover{background:#FBDCDC;}
 
+  .add-files-note{
+    font-size:12.5px;
+    color:var(--muted);
+    margin:10px 0 0;
+    line-height:1.5;
+    word-break:break-word;
+  }
+
   .field-group{margin-bottom:16px;}
   .field-group label{
     display:block;
@@ -490,6 +498,24 @@
     background:var(--purple-tint);
   }
   .folder.all-folder.active .fname{color:var(--ink);}
+
+  /* "Add files" tile */
+  .folder.add-folder{
+    background:transparent;
+    border:1.5px dashed var(--border);
+  }
+  .folder.add-folder:hover{
+    border-color:var(--purple);
+    background:var(--purple-tint);
+  }
+  .folder.add-folder .icon-circle{
+    background:var(--surface);
+    border:1px dashed var(--border);
+    color:var(--purple);
+    font-weight:700;
+  }
+  .folder.add-folder .fname{color:var(--ink);}
+  .folder.add-folder .fcount{color:var(--muted);}
 
   /* Upload panel */
   .upload-panel{
@@ -754,7 +780,7 @@
   <header>
     <div class="title-block">
       <h1><span>Dashboard</span></h1>
-      <p><span id="docCount">0</span> documents saved across 6 folders</p>
+      <p><span id="docCount">0</span> documents saved across <span id="folderCount">4</span> folders</p>
     </div>
     <div class="search-bar">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -880,6 +906,33 @@
   </div>
 </div>
 
+<!-- Add Files Modal -->
+<div class="modal-overlay" id="addFilesModal">
+  <div class="modal-card">
+    <button class="modal-close" id="closeAddFilesBtn">✕</button>
+    <h2>Add files</h2>
+
+    <div class="field-group">
+      <label for="addFolderName">Folder name</label>
+      <input type="text" id="addFolderName" maxlength="50" placeholder="e.g. Bank statements, Certificates, My documents" autocomplete="off">
+    </div>
+
+    <div class="field-group">
+      <label>Your files</label>
+      <div class="photo-actions">
+        <button type="button" class="photo-btn" id="addFilesPickBtn">Choose files</button>
+      </div>
+      <input type="file" id="addFilesInput" multiple>
+      <p class="add-files-note" id="addFilesList">No files selected yet.</p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="cancelAddFilesBtn">Cancel</button>
+      <button type="button" class="btn-primary" id="uploadAddFilesBtn">Upload</button>
+    </div>
+  </div>
+</div>
+
 <!-- Settings Modal -->
 <div class="modal-overlay" id="settingsModal">
   <div class="modal-card">
@@ -927,15 +980,16 @@
 </div>
 
 <script>
-  // Folder definitions matching backend ALLOWED_FOLDERS
-  const FOLDERS = [
+  // Built-in folders matching backend ALLOWED_FOLDERS (users can add their own)
+  const DEFAULT_FOLDERS = [
     { id:'Identity', name:'Identity', icon:'🪪', tint:'tint-blue' },
     { id:'Finance',  name:'Finance',  icon:'💵', tint:'tint-green' },
     { id:'Health',   name:'Health',   icon:'🩺', tint:'tint-purple' },
     { id:'Legal',    name:'Legal',    icon:'⚖️', tint:'tint-purple2' },
-    { id:'Property', name:'Property', icon:'🏠', tint:'tint-blue' },
-    { id:'Misc',     name:'Misc',     icon:'🗂️', tint:'tint-green' },
   ];
+
+  // Filled by buildFolderList(): built-in folders + any custom folders the user created
+  let FOLDERS = DEFAULT_FOLDERS.slice();
 
   // Load database documents passed by Flask backend
   let documents = [
@@ -963,6 +1017,20 @@
   const gridLabel = document.getElementById('gridLabel');
   const gridCountPill = document.getElementById('gridCountPill');
   const docCount = document.getElementById('docCount');
+  const folderCount = document.getElementById('folderCount');
+
+  // Rebuild FOLDERS from the built-in list plus folders found on the user's documents
+  function buildFolderList(){
+    const list = DEFAULT_FOLDERS.slice();
+    const known = new Set(list.map(f => f.id.toLowerCase()));
+    documents.forEach(doc => {
+      const name = (doc.folder || '').trim();
+      if(!name || known.has(name.toLowerCase())) return;
+      known.add(name.toLowerCase());
+      list.push({ id: name, name: name, icon: '📁', tint: 'tint-blue' });
+    });
+    FOLDERS = list;
+  }
 
   function fileIcon(type, name){
     type = (type || '').toLowerCase();
@@ -1003,16 +1071,30 @@
       el.innerHTML = `
         <span class="icon-circle">${f.icon}</span>
         <div>
-          <p class="fname">${f.name}</p>
+          <p class="fname">${escapeHtml(f.name)}</p>
           <p class="fcount">${count} filed</p>
         </div>`;
       el.onclick = () => { activeFolder = f.id; renderAll(); };
       folderRow.appendChild(el);
     });
+
+    // "Add files" tile lets the user name their own folder and upload files into it
+    const addTab = document.createElement('div');
+    addTab.className = 'folder add-folder';
+    addTab.innerHTML = `
+      <span class="icon-circle">＋</span>
+      <div>
+        <p class="fname">Add files</p>
+        <p class="fcount">Name your own folder</p>
+      </div>`;
+    addTab.onclick = openAddFilesModal;
+    folderRow.appendChild(addTab);
   }
 
   function populateSelect(){
-    targetFolder.innerHTML = FOLDERS.map(f => `<option value="${f.id}">${f.icon} ${f.name}</option>`).join('');
+    targetFolder.innerHTML = FOLDERS
+      .map(f => `<option value="${escapeHtml(f.id)}">${f.icon} ${escapeHtml(f.name)}</option>`)
+      .join('');
   }
 
   let docSelectMode = false;
@@ -1040,7 +1122,7 @@
     }
 
     list.forEach(doc => {
-      const folderMeta = FOLDERS.find(f => f.id.toLowerCase() === (doc.folder || '').toLowerCase()) || { name: doc.folder || 'Misc' };
+      const folderMeta = FOLDERS.find(f => f.id.toLowerCase() === (doc.folder || '').toLowerCase()) || { name: doc.folder || 'My Files' };
       const card = document.createElement('div');
       const isSelected = selectedDocIds.has(doc.id);
       card.className = 'card' + (docSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
@@ -1053,7 +1135,7 @@
             <button type="button" class="card-btn del" title="Remove document" onclick="event.stopPropagation(); deleteDocument(${doc.id});">✕</button>
           </div>
         </div>
-        <span class="folder-badge">${folderMeta.name}</span>
+        <span class="folder-badge">${escapeHtml(folderMeta.name)}</span>
         <div class="title">${escapeHtml(doc.name)}</div>
         <div class="meta"><span>${formatSize(doc.size)}</span><span>${doc.addedAt}</span></div>
       `;
@@ -1080,14 +1162,16 @@
 
   function renderAll(){
     docCount.textContent = documents.length;
+    buildFolderList();
+    folderCount.textContent = FOLDERS.length;
     renderFolders();
     renderGrid();
   }
 
   // Upload files to database via backend
-  async function uploadFiles(fileList){
+  async function uploadFiles(fileList, folderOverride){
     if(!fileList || fileList.length === 0) return;
-    const folder = targetFolder.value;
+    const folder = folderOverride || targetFolder.value;
     const formData = new FormData();
     formData.append('folder', folder);
     for(let i = 0; i < fileList.length; i++){
@@ -1181,6 +1265,65 @@
     if(e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
   });
 
+  // "Add files" modal — the user names their own folder and uploads files into it
+  const addFilesModal = document.getElementById('addFilesModal');
+  const closeAddFilesBtn = document.getElementById('closeAddFilesBtn');
+  const cancelAddFilesBtn = document.getElementById('cancelAddFilesBtn');
+  const addFilesPickBtn = document.getElementById('addFilesPickBtn');
+  const addFilesInput = document.getElementById('addFilesInput');
+  const addFolderName = document.getElementById('addFolderName');
+  const addFilesList = document.getElementById('addFilesList');
+  const uploadAddFilesBtn = document.getElementById('uploadAddFilesBtn');
+  let pendingAddFiles = null;
+
+  function openAddFilesModal(){
+    pendingAddFiles = null;
+    addFolderName.value = '';
+    addFilesInput.value = '';
+    addFilesList.textContent = 'No files selected yet.';
+    uploadAddFilesBtn.disabled = false;
+    uploadAddFilesBtn.textContent = 'Upload';
+    addFilesModal.classList.add('open');
+    addFolderName.focus();
+  }
+
+  function closeAddFilesModal(){
+    addFilesModal.classList.remove('open');
+  }
+
+  closeAddFilesBtn.addEventListener('click', closeAddFilesModal);
+  cancelAddFilesBtn.addEventListener('click', closeAddFilesModal);
+  addFilesModal.addEventListener('click', e => { if(e.target === addFilesModal) closeAddFilesModal(); });
+
+  addFilesPickBtn.addEventListener('click', () => addFilesInput.click());
+  addFilesInput.addEventListener('change', e => {
+    pendingAddFiles = e.target.files;
+    if(!pendingAddFiles || pendingAddFiles.length === 0){
+      addFilesList.textContent = 'No files selected yet.';
+      return;
+    }
+    const names = Array.from(pendingAddFiles).map(f => f.name);
+    addFilesList.textContent = `${names.length} file(s): ${names.join(', ')}`;
+  });
+
+  uploadAddFilesBtn.addEventListener('click', async () => {
+    const folderName = addFolderName.value.trim();
+    if(!folderName){
+      addFolderName.focus();
+      alert('Please name your folder first.');
+      return;
+    }
+    if(!pendingAddFiles || pendingAddFiles.length === 0){
+      alert('Please choose at least one file.');
+      return;
+    }
+    uploadAddFilesBtn.disabled = true;
+    uploadAddFilesBtn.textContent = 'Uploading…';
+    await uploadFiles(pendingAddFiles, folderName);
+    uploadAddFilesBtn.disabled = false;
+    uploadAddFilesBtn.textContent = 'Upload';
+  });
+
   document.getElementById('searchInput').addEventListener('input', e => {
     searchTerm = e.target.value;
     renderGrid();
@@ -1217,8 +1360,8 @@
   docSelectCancel.addEventListener('click', exitDocSelectMode);
   docDeleteSelectedBtn.addEventListener('click', deleteSelectedDocuments);
 
-  populateSelect();
   renderAll();
+  populateSelect();
 
   // --- Notepad / Database Connected Notes ---
   let notes = [

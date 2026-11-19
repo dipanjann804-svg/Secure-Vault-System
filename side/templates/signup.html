@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up</title>
+</head>
+
+<body>
+    <form action="/signup" method="POST">
+        <div style="text-align: center"; margin: auto; class="mb-3">
+            <h1>Sign Up</h1>
+            <input type="text" 
+                    id="username" 
+                    name="username" 
+                    placeholder="Enter your username" 
+                    required>
+            <br><br>
+
+            <input type="email" 
+                    id="email" 
+                    name="email" 
+                    placeholder="Enter your email" 
+                    required
+                >
+            <br><br>
+
+            <div class="password-box">
+                <input type="password" 
+                        id="password"
+                        name="password" 
+                        placeholder="Enter your password"
+                        required
+                    >
+                <button type="button" onclick="togglePassword('password', this)">Show</button>  
+                <br><br>
+            </div>
+            <div class="password-box">
+                <input type="password" 
+                        id="confirm_password" 
+                        name="confirm_password" 
+                        placeholder="Confirm your password" 
+                        required
+                    >
+                <button type="button" onclick="togglePassword('confirm_password', this)">Show</button>
+                <br><br>
+            </div>
+
+            <button type="submit">Sign Up</button>
+        </div>
+    </form>
+
+</body>
+</html>

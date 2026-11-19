@@ -36,7 +36,7 @@ class Document(db.Model):
     file_path = db.Column(db.String(500), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
     file_type = db.Column(db.String(100), nullable=True)
-    folder = db.Column(db.String(50), nullable=False)  # 'Identity', 'Finance', 'Health', 'Legal', 'Property', 'Misc'
+    folder = db.Column(db.String(50), nullable=False)  # built-in folder or a user-created folder name
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
