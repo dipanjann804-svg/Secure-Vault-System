@@ -346,6 +346,26 @@
   html[data-theme="dark"] .btn-danger{background:#3A1F20; color:#F17B75;}
   html[data-theme="dark"] .btn-danger:hover{background:#472628;}
 
+  .hidden-folders{
+    display:flex; flex-wrap:wrap; gap:8px;
+    padding:10px 0 14px;
+  }
+  .hidden-folders .none{
+    font-size:12.5px; color:var(--muted);
+  }
+  .hidden-chip{
+    font-family:inherit;
+    font-size:12.5px; font-weight:600;
+    padding:7px 12px;
+    border-radius:999px;
+    border:1px solid var(--border);
+    background:var(--surface-soft);
+    color:var(--ink);
+    cursor:pointer;
+    display:inline-flex; align-items:center; gap:6px;
+  }
+  .hidden-chip:hover{border-color:var(--purple); color:var(--purple);}
+
   /* Change-password button — matches screenshot: dark pill, blue text */
   .btn-change-password{
     font-family:inherit; font-size:14px; font-weight:600;
@@ -452,6 +472,7 @@
     cursor:pointer;
     transition:transform .15s ease, border-color .15s ease;
     text-align:left;
+    position:relative;
   }
   .folder:hover{transform:translateY(-2px);}
   .folder.active{border-color:var(--purple);}
@@ -516,6 +537,13 @@
   }
   .folder.add-folder .fname{color:var(--ink);}
   .folder.add-folder .fcount{color:var(--muted);}
+
+  /* Folder actions above the upload panel */
+  .folder-actions{
+    display:flex;
+    justify-content:flex-end;
+    margin:-18px 0 12px;
+  }
 
   /* Upload panel */
   .upload-panel{
@@ -803,6 +831,11 @@
   <div class="section-heading"><h2>Folders</h2></div>
   <div class="folders" id="folderRow"></div>
 
+  <!-- Folder actions (shown after selecting a folder) -->
+  <div class="folder-actions" id="folderActions" style="display:none;">
+    <button type="button" class="delete-selected-btn" id="docRemoveFolderBtn">Remove folder</button>
+  </div>
+
   <!-- Document upload form / dropzone connected with backend database -->
   <div class="upload-panel" id="dropzone">
     <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
@@ -959,6 +992,9 @@
       <button type="button" class="btn-danger" id="manageDocsBtn">Select</button>
     </div>
 
+    <div class="settings-section-title">Hidden folders</div>
+    <div class="hidden-folders" id="hiddenFoldersList"></div>
+
     <div class="settings-section-title">Notepad</div>
     <div class="danger-row">
       <div>
@@ -980,16 +1016,19 @@
 </div>
 
 <script>
-  // Built-in folders matching backend ALLOWED_FOLDERS (users can add their own)
-  const DEFAULT_FOLDERS = [
-    { id:'Identity', name:'Identity', icon:'🪪', tint:'tint-blue' },
-    { id:'Finance',  name:'Finance',  icon:'💵', tint:'tint-green' },
-    { id:'Health',   name:'Health',   icon:'🩺', tint:'tint-purple' },
-    { id:'Legal',    name:'Legal',    icon:'⚖️', tint:'tint-purple2' },
-  ];
+  // Icons/tints for the built-in folders. Visible built-in names come from the
+  // backend so folders the user removed stay hidden.
+  const FOLDER_META = {
+    Identity: { icon:'🪪', tint:'tint-blue' },
+    Finance:  { icon:'💵', tint:'tint-green' },
+    Health:   { icon:'🩺', tint:'tint-purple' },
+    Legal:    { icon:'⚖️', tint:'tint-purple2' },
+  };
+  let BUILTIN_FOLDERS = {{ default_folders|tojson }};
+  let hiddenFolders = {{ hidden_folders|tojson }};
 
   // Filled by buildFolderList(): built-in folders + any custom folders the user created
-  let FOLDERS = DEFAULT_FOLDERS.slice();
+  let FOLDERS = [];
 
   // Load database documents passed by Flask backend
   let documents = [
@@ -1016,12 +1055,17 @@
   const targetFolder = document.getElementById('targetFolder');
   const gridLabel = document.getElementById('gridLabel');
   const gridCountPill = document.getElementById('gridCountPill');
+  const docRemoveFolderBtn = document.getElementById('docRemoveFolderBtn');
+  const folderActions = document.getElementById('folderActions');
   const docCount = document.getElementById('docCount');
   const folderCount = document.getElementById('folderCount');
 
   // Rebuild FOLDERS from the built-in list plus folders found on the user's documents
   function buildFolderList(){
-    const list = DEFAULT_FOLDERS.slice();
+    const list = BUILTIN_FOLDERS.map(name => {
+      const meta = FOLDER_META[name] || { icon: '📁', tint: 'tint-blue' };
+      return { id: name, name: name, icon: meta.icon, tint: meta.tint };
+    });
     const known = new Set(list.map(f => f.id.toLowerCase()));
     documents.forEach(doc => {
       const name = (doc.folder || '').trim();
@@ -1114,6 +1158,7 @@
     const label = activeFolder === 'all' ? 'All documents' : (currentF ? currentF.name : activeFolder);
     gridLabel.textContent = searchTerm.trim() ? `Results for "${searchTerm}"` : label;
     gridCountPill.textContent = list.length + (list.length === 1 ? ' file' : ' files');
+    folderActions.style.display = activeFolder === 'all' ? 'none' : 'flex';
 
     docGrid.innerHTML = '';
     if(list.length === 0){
@@ -1161,11 +1206,89 @@
   }
 
   function renderAll(){
+    const previousSelection = targetFolder.value;
     docCount.textContent = documents.length;
     buildFolderList();
     folderCount.textContent = FOLDERS.length;
     renderFolders();
     renderGrid();
+    populateSelect();
+    if(previousSelection && FOLDERS.some(f => f.id === previousSelection)){
+      targetFolder.value = previousSelection;
+    }
+  }
+
+  // Remove a folder (and the files inside it) from the dashboard
+  async function removeFolder(name){
+    const count = documents.filter(d => (d.folder || '').toLowerCase() === name.toLowerCase()).length;
+    const message = count > 0
+      ? `Remove the "${name}" folder?\n\n${count} file(s) inside will be permanently deleted.`
+      : `Remove the "${name}" folder?`;
+    if(!confirm(message)) return;
+
+    const builtin = BUILTIN_FOLDERS.find(f => f.toLowerCase() === name.toLowerCase());
+
+    try {
+      const res = await fetch('/folders/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        documents = documents.filter(d => (d.folder || '').toLowerCase() !== name.toLowerCase());
+        BUILTIN_FOLDERS = BUILTIN_FOLDERS.filter(f => f.toLowerCase() !== name.toLowerCase());
+        if(builtin && !hiddenFolders.some(h => h.toLowerCase() === builtin.toLowerCase())){
+          hiddenFolders.push(builtin);
+        }
+        if(activeFolder.toLowerCase() === name.toLowerCase()) activeFolder = 'all';
+        renderAll();
+        renderHiddenFolders();
+      } else {
+        alert(data.message || 'Could not remove folder.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error removing folder: ' + err.message);
+    }
+  }
+
+  const hiddenFoldersList = document.getElementById('hiddenFoldersList');
+
+  function renderHiddenFolders(){
+    hiddenFoldersList.innerHTML = '';
+    if(hiddenFolders.length === 0){
+      hiddenFoldersList.innerHTML = '<span class="none">No hidden folders.</span>';
+      return;
+    }
+    hiddenFolders.forEach(name => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'hidden-chip';
+      btn.title = `Restore ${name} folder`;
+      btn.innerHTML = `${escapeHtml(name)} <span aria-hidden="true">↺</span>`;
+      btn.onclick = () => restoreFolder(name);
+      hiddenFoldersList.appendChild(btn);
+    });
+  }
+
+  async function restoreFolder(name){
+    try {
+      const res = await fetch('/folders/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      });
+      const data = await res.json();
+      if(data.status === 'ok'){
+        window.location.reload();
+      } else {
+        alert(data.message || 'Could not restore folder.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error restoring folder: ' + err.message);
+    }
   }
 
   // Upload files to database via backend
@@ -1360,8 +1483,13 @@
   docSelectCancel.addEventListener('click', exitDocSelectMode);
   docDeleteSelectedBtn.addEventListener('click', deleteSelectedDocuments);
 
+  // Remove the folder currently selected in the folder row
+  docRemoveFolderBtn.addEventListener('click', () => {
+    if(activeFolder !== 'all') removeFolder(activeFolder);
+  });
+
   renderAll();
-  populateSelect();
+  renderHiddenFolders();
 
   // --- Notepad / Database Connected Notes ---
   let notes = [

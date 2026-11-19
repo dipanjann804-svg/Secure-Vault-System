@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import uuid
 import socket
 import time
@@ -135,6 +136,27 @@ def _clean_folder_name(value):
     name = re.sub(r"\s+", " ", (value or "").strip())
     name = name[:50].strip()
     return name or FALLBACK_FOLDER
+
+
+def _get_hidden_folders(user):
+    """Return the list of built-in folders the user has removed, safely parsed."""
+    if not user or not user.hidden_folders:
+        return []
+    try:
+        data = json.loads(user.hidden_folders)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(name) for name in data if isinstance(name, str)]
+
+
+def _canonical_builtin_folder(name):
+    """Return the built-in folder matching name (case-insensitive), else None."""
+    for folder in ALLOWED_FOLDERS:
+        if folder.lower() == (name or "").strip().lower():
+            return folder
+    return None
 
 
 def _sync_schema():
@@ -593,7 +615,11 @@ def create_app():
             doc.folder for doc in documents
             if doc.folder and doc.folder not in ALLOWED_FOLDERS
         })
-        folders = ALLOWED_FOLDERS + custom_folders
+        all_folders = ALLOWED_FOLDERS + custom_folders
+
+        # Built-in folders the user removed with the "×" on the folder card
+        hidden_folders = _get_hidden_folders(current_user)
+        folders = [f for f in all_folders if f not in hidden_folders]
 
         # Calculate counts per folder
         folder_counts = {folder: 0 for folder in folders}
@@ -607,6 +633,8 @@ def create_app():
             documents=documents,
             notes=notes,
             folders=folders,
+            default_folders=[f for f in ALLOWED_FOLDERS if f not in hidden_folders],
+            hidden_folders=[f for f in ALLOWED_FOLDERS if f in hidden_folders],
             folder_counts=folder_counts
         )
 
@@ -697,6 +725,68 @@ def create_app():
             return jsonify({"status": "ok", "deleted_count": deleted_count})
 
         flash(f"Deleted {deleted_count} document(s)", "success")
+        return redirect(url_for("dashboard"))
+
+    # --- Folder Routes ---
+    @app.route("/folders/remove", methods=["POST"])
+    @login_required
+    def remove_folder():
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        folder = _clean_folder_name(data.get("name"))
+
+        # Delete every file the user has in this folder
+        docs = Document.query.filter_by(user_id=current_user.id).filter(
+            func.lower(Document.folder) == folder.lower()
+        ).all()
+        deleted_count = 0
+        for doc in docs:
+            if doc.file_path and os.path.exists(doc.file_path):
+                try:
+                    os.remove(doc.file_path)
+                except OSError:
+                    pass
+            db.session.delete(doc)
+            deleted_count += 1
+
+        # Built-in folders are recreated on every dashboard load, so remember
+        # that the user removed this one. Custom folders disappear on their own.
+        canonical = _canonical_builtin_folder(folder)
+        if canonical:
+            hidden = _get_hidden_folders(current_user)
+            if canonical not in hidden:
+                hidden.append(canonical)
+                current_user.hidden_folders = json.dumps(hidden)
+
+        db.session.commit()
+
+        if request.is_json:
+            return jsonify({
+                "status": "ok",
+                "folder": canonical or folder,
+                "deleted_count": deleted_count,
+            })
+
+        flash(f"Removed folder '{canonical or folder}' ({deleted_count} file(s) deleted)", "success")
+        return redirect(url_for("dashboard"))
+
+    @app.route("/folders/restore", methods=["POST"])
+    @login_required
+    def restore_folder():
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        folder = _clean_folder_name(data.get("name"))
+        canonical = _canonical_builtin_folder(folder) or folder
+
+        hidden = [
+            name for name in _get_hidden_folders(current_user)
+            if name.lower() != canonical.lower()
+        ]
+        current_user.hidden_folders = json.dumps(hidden)
+        db.session.commit()
+
+        if request.is_json:
+            return jsonify({"status": "ok", "folder": canonical})
+
+        flash(f"Restored folder '{canonical}'", "success")
         return redirect(url_for("dashboard"))
 
     # --- Notepad / Notes Routes ---

@@ -16,6 +16,7 @@ class User(UserMixin, db.Model):
     gender = db.Column(db.String(30), nullable=True)
     location = db.Column(db.String(150), nullable=True)
     profile_photo = db.Column(db.Text, nullable=True)  # URL or base64 data
+    hidden_folders = db.Column(db.Text, nullable=True)  # JSON list of built-in folders removed by the user
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
