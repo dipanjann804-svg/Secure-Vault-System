@@ -93,6 +93,22 @@
     font-size:14.5px;
   }
 
+  /* Folder page */
+  .back-link{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    font-size:13px;
+    font-weight:600;
+    color:var(--purple);
+    text-decoration:none;
+    margin-bottom:10px;
+  }
+  .back-link:hover{text-decoration:underline;}
+  body.folder-page .folders-heading,
+  body.folder-page #folderRow,
+  body.folder-page .notepad-section{display:none;}
+
   .search-bar{
     position:relative;
     min-width:320px;
@@ -789,7 +805,7 @@
   }
 </style>
 </head>
-<body>
+<body class="{% if folder_view %}folder-page{% endif %}">
 <div class="wrap">
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -806,10 +822,20 @@
   {% endwith %}
 
   <header>
+    {% if folder_view %}
+    <div class="title-block">
+      <a class="back-link" href="/dashboard">← All folders</a>
+      <h1><span>{{ active_folder }}</span></h1>
+      <p><span id="folderPageCount">{{ folder_counts.get(active_folder, 0) }}</span> <span id="folderPageNoun">{% if folder_counts.get(active_folder, 0) == 1 %}file{% else %}files{% endif %}</span> in this folder</p>
+      <span id="docCount" hidden>{{ documents|length }}</span>
+      <span id="folderCount" hidden>{{ folders|length }}</span>
+    </div>
+    {% else %}
     <div class="title-block">
       <h1><span>Dashboard</span></h1>
       <p><span id="docCount">0</span> documents saved across <span id="folderCount">4</span> folders</p>
     </div>
+    {% endif %}
     <div class="search-bar">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="text" id="searchInput" placeholder="Search your documents…">
@@ -828,7 +854,7 @@
     </div>
   </header>
 
-  <div class="section-heading"><h2>Folders</h2></div>
+  <div class="section-heading folders-heading"><h2>Folders</h2></div>
   <div class="folders" id="folderRow"></div>
 
   <!-- Folder actions (shown after selecting a folder) -->
@@ -843,6 +869,7 @@
       <select id="targetFolder" name="folder"></select>
       <button type="button" class="btn-primary" id="browseBtn">Choose files</button>
       <input type="file" id="fileInput" name="files" multiple>
+      <input type="hidden" name="return_to" value="{% if folder_view %}{{ active_folder }}{% endif %}">
     </form>
   </div>
 
@@ -1047,7 +1074,8 @@
     {% endif %}
   ];
 
-  let activeFolder = 'all';
+  let activeFolder = {{ (active_folder or 'all')|tojson }};
+  const FOLDER_VIEW = {{ 'true' if folder_view else 'false' }};
   let searchTerm = '';
 
   const folderRow = document.getElementById('folderRow');
@@ -1105,7 +1133,11 @@
         <p class="fname">All Documents</p>
         <p class="fcount">${documents.length} filed</p>
       </div>`;
-    allTab.onclick = () => { activeFolder = 'all'; renderAll(); };
+    allTab.onclick = () => {
+      if(FOLDER_VIEW){ window.location.href = '/dashboard'; return; }
+      activeFolder = 'all';
+      renderAll();
+    };
     folderRow.appendChild(allTab);
 
     FOLDERS.forEach(f => {
@@ -1118,7 +1150,8 @@
           <p class="fname">${escapeHtml(f.name)}</p>
           <p class="fcount">${count} filed</p>
         </div>`;
-      el.onclick = () => { activeFolder = f.id; renderAll(); };
+      // Each folder opens its own page.
+      el.onclick = () => { window.location.href = '/folders/' + encodeURIComponent(f.id); };
       folderRow.appendChild(el);
     });
 
@@ -1159,6 +1192,12 @@
     gridLabel.textContent = searchTerm.trim() ? `Results for "${searchTerm}"` : label;
     gridCountPill.textContent = list.length + (list.length === 1 ? ' file' : ' files');
     folderActions.style.display = activeFolder === 'all' ? 'none' : 'flex';
+
+    // Keep the folder-page subtitle in sync (and with the search filter)
+    const folderPageCount = document.getElementById('folderPageCount');
+    const folderPageNoun = document.getElementById('folderPageNoun');
+    if(folderPageCount) folderPageCount.textContent = list.length;
+    if(folderPageNoun) folderPageNoun.textContent = list.length === 1 ? 'file' : 'files';
 
     docGrid.innerHTML = '';
     if(list.length === 0){
@@ -1216,6 +1255,11 @@
     if(previousSelection && FOLDERS.some(f => f.id === previousSelection)){
       targetFolder.value = previousSelection;
     }
+    // On a folder page the upload panel should default to that folder.
+    if(FOLDER_VIEW && activeFolder !== 'all'){
+      const match = FOLDERS.find(f => f.id.toLowerCase() === activeFolder.toLowerCase());
+      if(match) targetFolder.value = match.id;
+    }
   }
 
   // Remove a folder (and the files inside it) from the dashboard
@@ -1240,6 +1284,11 @@
         BUILTIN_FOLDERS = BUILTIN_FOLDERS.filter(f => f.toLowerCase() !== name.toLowerCase());
         if(builtin && !hiddenFolders.some(h => h.toLowerCase() === builtin.toLowerCase())){
           hiddenFolders.push(builtin);
+        }
+        // The folder page no longer exists — go back to the dashboard.
+        if(FOLDER_VIEW){
+          window.location.replace('/dashboard');
+          return;
         }
         if(activeFolder.toLowerCase() === name.toLowerCase()) activeFolder = 'all';
         renderAll();

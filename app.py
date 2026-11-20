@@ -592,9 +592,8 @@ def create_app():
         return render_template("change_password.html", errors=errors)
 
     # --- Dashboard ---
-    @app.route("/dashboard")
-    @login_required
-    def dashboard():
+    def _dashboard_context(active_folder=None):
+        """Build the data the dashboard / folder page templates need."""
         # Fetch user's documents
         documents = Document.query.filter_by(user_id=current_user.id).order_by(Document.created_at.desc()).all()
 
@@ -627,16 +626,41 @@ def create_app():
             if doc.folder in folder_counts:
                 folder_counts[doc.folder] += 1
 
-        return render_template(
-            "dashboard.html",
-            user=current_user,
-            documents=documents,
-            notes=notes,
-            folders=folders,
-            default_folders=[f for f in ALLOWED_FOLDERS if f not in hidden_folders],
-            hidden_folders=[f for f in ALLOWED_FOLDERS if f in hidden_folders],
-            folder_counts=folder_counts
+        return {
+            "user": current_user,
+            "documents": documents,
+            "notes": notes,
+            "folders": folders,
+            "default_folders": [f for f in ALLOWED_FOLDERS if f not in hidden_folders],
+            "hidden_folders": [f for f in ALLOWED_FOLDERS if f in hidden_folders],
+            "folder_counts": folder_counts,
+            "active_folder": active_folder,
+            "folder_view": active_folder is not None,
+        }
+
+    @app.route("/dashboard")
+    @login_required
+    def dashboard():
+        return render_template("dashboard.html", **_dashboard_context())
+
+    @app.route("/folders/<path:folder_name>")
+    @login_required
+    def folder_page(folder_name):
+        """Dedicated page showing one folder and the files inside it."""
+        context = _dashboard_context()
+        wanted = (folder_name or "").strip()
+
+        # Match case-insensitively so /folders/finance and /folders/Finance both work.
+        match = next(
+            (name for name in context["folders"] if name.lower() == wanted.lower()),
+            None
         )
+        if match is None:
+            abort(404)
+
+        context["active_folder"] = match
+        context["folder_view"] = True
+        return render_template("dashboard.html", **context)
 
     # --- Document Routes ---
     @app.route("/documents/upload", methods=["POST"])
@@ -674,6 +698,9 @@ def create_app():
 
         db.session.commit()
         flash(f"Successfully uploaded {uploaded_count} file(s) to '{folder}'!", "success")
+        # Uploads started from a folder page return to that folder's page.
+        if (request.form.get("return_to") or "").strip():
+            return redirect(url_for("folder_page", folder_name=folder))
         return redirect(url_for("dashboard"))
 
     @app.route("/documents/<int:doc_id>/download")
