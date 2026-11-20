@@ -109,6 +109,45 @@
   body.folder-page #folderRow,
   body.folder-page .notepad-section{display:none;}
 
+  /* Folder page: one panel holds the uploader and the files. */
+  body.folder-page .files-panel{
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:20px;
+    padding:16px 18px 22px;
+  }
+  body.folder-page .upload-panel{
+    width:max-content;
+    max-width:100%;
+    margin:0 0 18px auto;
+    padding:8px 10px;
+    background:var(--surface);
+    border:1.5px solid var(--border);
+    border-radius:16px;
+    text-align:right;
+  }
+  body.folder-page .upload-panel.dragover{
+    border-color:var(--purple);
+    background:var(--purple-tint);
+  }
+  body.folder-page .upload-panel > p{display:none;}
+  body.folder-page .upload-row{justify-content:flex-end; gap:8px;}
+  /* Empty folder: the panel itself is the big centered dropzone. */
+  body.folder-page.folder-empty .files-panel{padding:0;}
+  body.folder-page.folder-empty .upload-panel{
+    width:100%;
+    margin:0;
+    padding:56px 24px;
+    text-align:center;
+    background:transparent;
+    border:none;
+    border-radius:20px;
+  }
+  body.folder-page.folder-empty .upload-panel > p{display:block;}
+  body.folder-page.folder-empty .upload-row{justify-content:center;}
+  body.folder-page.folder-empty .doc-heading,
+  body.folder-page.folder-empty #docGrid{display:none;}
+
   .search-bar{
     position:relative;
     min-width:320px;
@@ -805,7 +844,7 @@
   }
 </style>
 </head>
-<body class="{% if folder_view %}folder-page{% endif %}">
+<body class="{% if folder_view %}folder-page{% if folder_counts.get(active_folder, 0) == 0 %} folder-empty{% endif %}{% endif %}">
 <div class="wrap">
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -862,27 +901,30 @@
     <button type="button" class="delete-selected-btn" id="docRemoveFolderBtn">Remove folder</button>
   </div>
 
-  <!-- Document upload form / dropzone connected with backend database -->
-  <div class="upload-panel" id="dropzone">
-    <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
-    <form id="uploadForm" action="/documents/upload" method="POST" enctype="multipart/form-data" class="upload-row">
-      <select id="targetFolder" name="folder"></select>
-      <button type="button" class="btn-primary" id="browseBtn">Choose files</button>
-      <input type="file" id="fileInput" name="files" multiple>
-      <input type="hidden" name="return_to" value="{% if folder_view %}{{ active_folder }}{% endif %}">
-    </form>
-  </div>
-
-  <div class="section-heading">
-    <h2 id="gridLabel">All documents</h2>
-    <div class="heading-actions">
-      <span class="count-pill" id="gridCountPill">0 files</span>
-      <button type="button" class="select-toggle-btn" id="docSelectToggle">Select</button>
-      <button type="button" class="delete-selected-btn" id="docDeleteSelectedBtn" style="display:none;">Delete (0)</button>
-      <button type="button" class="select-cancel-btn" id="docSelectCancel" style="display:none;">Cancel</button>
+  <!-- Uploader + document list. On a folder page both live inside one panel. -->
+  <div class="files-panel" id="filesPanel">
+    <!-- Document upload form / dropzone connected with backend database -->
+    <div class="upload-panel" id="dropzone">
+      <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
+      <form id="uploadForm" action="/documents/upload" method="POST" enctype="multipart/form-data" class="upload-row">
+        <select id="targetFolder" name="folder"></select>
+        <button type="button" class="btn-primary" id="browseBtn">Choose files</button>
+        <input type="file" id="fileInput" name="files" multiple>
+        <input type="hidden" name="return_to" value="{% if folder_view %}{{ active_folder }}{% endif %}">
+      </form>
     </div>
+
+    <div class="section-heading doc-heading">
+      <h2 id="gridLabel">All documents</h2>
+      <div class="heading-actions">
+        <span class="count-pill" id="gridCountPill">0 files</span>
+        <button type="button" class="select-toggle-btn" id="docSelectToggle">Select</button>
+        <button type="button" class="delete-selected-btn" id="docDeleteSelectedBtn" style="display:none;">Delete (0)</button>
+        <button type="button" class="select-cancel-btn" id="docSelectCancel" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="doc-grid" id="docGrid"></div>
   </div>
-  <div class="doc-grid" id="docGrid"></div>
 
   <div class="notepad-section">
     <div class="section-heading">
@@ -1251,6 +1293,14 @@
     folderCount.textContent = FOLDERS.length;
     renderFolders();
     renderGrid();
+
+    // Folder pages: big centered dropzone while the folder is empty, compact
+    // top-right upload bar once it contains files.
+    if(FOLDER_VIEW){
+      const inFolder = documents.filter(d => (d.folder || '').toLowerCase() === activeFolder.toLowerCase()).length;
+      document.body.classList.toggle('folder-empty', inFolder === 0);
+    }
+
     populateSelect();
     if(previousSelection && FOLDERS.some(f => f.id === previousSelection)){
       targetFolder.value = previousSelection;
