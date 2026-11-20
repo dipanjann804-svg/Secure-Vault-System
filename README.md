@@ -27,6 +27,7 @@ A Flask web app for storing personal documents and notes securely. Files are org
 - **Account deletion** — permanently erase the account and all of its data
 - **Email verification at registration** — confirm the address before the vault unlocks
 - **Emergency Lockdown** — one click kills every session, link and download
+- **Advanced catalogue** — steganographic vault, canary bait files, Shamir key sharding, air-gapped HTML export, time-capsules, forensic watermarking, shoulder-surfer guard, emergency shredder, plus workstation features. See [Advanced Feature Catalogue](#advanced-feature-catalogue-planned--experimental).
 
 ## Tech Stack
 
@@ -322,6 +323,166 @@ One click on the dashboard's **Emergency Lockdown** button must do all six thing
 Unlock (`POST /emergency-lockdown/unlock`) requires the account password, clears `downloads_blocked_until` and `locked_down_at`, and re-issues share links rather than reviving revoked ones. Lockdown is never reversible by a single GET, never by a token in a URL, and never by the same session that triggered it without a fresh password.
 
 **Implementation note.** Do the database writes in one transaction, then send the email after commit — an email failure must not roll back the lock. Log and surface any error instead of swallowing it.
+
+---
+
+---
+
+## Advanced Feature Catalogue (Planned / Experimental)
+
+A wider set of defensive and usability features, catalogued so they can be prioritised deliberately rather than accumulated. **None of this is implemented.** Several items are genuinely valuable, several are speculative, and a few are closer to theatre than security — each section says which, because shipping security features that do not work is worse than shipping none. The [matrix in §3](#3-architecture--implementation-matrix) scores every feature, including the ones already specced above.
+
+### 1. Unconventional Defensive & Cryptographic Features
+
+#### 1.1 Steganographic "Cloaked Vault"
+
+Embeds encrypted notes and documents inside ordinary photo or audio files (LSB steganography) so the container looks like an innocent image or song.
+
+- Carrier must be **lossless** — PNG, BMP, or WAV. JPEG/MP3 re-encode destroys LSB payloads; a "save as JPEG" round-trip silently eats the vault.
+- Capacity is roughly 1 bit per colour-channel byte: a 1 MB encrypted payload needs a ~8 MB PNG. Document the limit in the UI instead of failing at export time.
+- Payload layout: magic header + version + AES-GCM nonce + ciphertext + GCM tag. Extraction verifies the tag before writing anything to disk.
+- The vault byte stream must be padded so payload size does not leak through file size, and the container's EXIF must be preserved (a stripped EXIF is itself a tell).
+
+**Honest rating: low.** LSB payloads are detectable by chi-square and RS analysis, and Fernet output is high-entropy — the *presence* of a payload is not hidden from a forensic analyst, only from a casual observer. Plausible deniability is also defeated by the server's own database rows, uploads folder and access logs; a cloaked vault is only coherent if the app keeps **no** metadata linking the container to the user. That is a redesign, not a feature toggle. Treat this as "hides the file in a photo", not "defeats an adversary".
+
+#### 1.2 Canary "Honey-Files"
+
+Realistic decoy documents that look like the real thing; opening one fires a silent webhook with the visitor's IP and device fingerprint.
+
+- Each canary gets a 128-bit random id (non-enumerable). Beacon route: `GET /canary/<canary_id>.gif` — 1×1 transparent GIF, always `200`, `Cache-Control: no-store`.
+- Works for **documents served through the vault** (a PDF/HTML whose remote image or link hits the beacon). It cannot work for a file downloaded once and opened offline.
+- Alert payload: canary label, timestamp, IP (via `ProxyFix`, only if behind exactly one trusted proxy), user agent, `Accept-Language`, and an optional coarse fingerprint (canvas/WebGL hash, screen size). Fingerprints are fuzzy — record them as a hint, never as identity.
+- Bait documents must be marked in the database (`Document.is_canary`) and excluded from trash purge, share links and downloads for the real owner.
+- Rate limit the beacon (per IP), never log the beacon URL anywhere public, and never let the beacon response differ between hit and miss.
+
+**Honest rating: medium — detection only.** It tells you someone opened a document you planted; it does not prevent anything, and false positives (a sandboxed mail scanner fetching remote images) are common. Fingerprinting also carries privacy and legal obligations in some jurisdictions — keep it opt-in per user.
+
+#### 1.3 Shamir's Secret Sharing
+
+Fractures the master recovery key into a (k, n) threshold scheme distributed among trusted parties, removing the single point of key failure.
+
+- Split in GF(2⁸) with `secrets` as the randomness source; encode shards as a wordlist (BIP39-style) so they can be printed on paper without transcription errors.
+- Each shard carries a **version, index and a hash commitment**; combining shards from different generations must fail loudly rather than silently reconstructing garbage.
+- Reconstruction happens client-side or in a one-off CLI — **not** in a long-running web route, because k shards in process memory is exactly the moment the whole scheme is defeated.
+- The server must hold **at most one** shard, and preferably zero. If the app stores all n, Shamir adds nothing.
+
+**Honest rating: high, conditional on operational discipline.** The maths is sound; the failure mode is human — shards emailed to the same provider, or three holders in one office. Pair it with a documented recovery rehearsal.
+
+#### 1.4 Air-Gapped Portable HTML Vault
+
+One-click export producing a single `.html` file containing the ciphertext and a Web Crypto AES engine, openable offline from a cold-storage USB stick with zero dependencies.
+
+- Key derivation in-browser: PBKDF2-SHA-256 (≥ 600k iterations) or, better, Argon2id via WASM. The passphrase is typed on the air-gapped machine and never stored.
+- `AES-GCM` with a fresh 96-bit nonce per export; the file embeds `{version, kdf params, salt, nonce, ciphertext}` as a JSON blob the inline script parses.
+- Constraints: browsers restrict some APIs on `file://`; Web Crypto needs a secure context (`file://` counts in current browsers, but verify on the target machine); base64 inflates payloads ~33 %, so cap the export or offer chunked archives.
+- Integrity: the export includes a SHA-256 of its own payload, and the download page shows that hash so it can be compared out-of-band. A tampered export is the real risk — a malicious HTML vault would happily exfiltrate the passphrase.
+
+**Honest rating: high for the offline/cold-storage use case**, with the caveat that security reduces to passphrase strength and to trusting the one HTML file you carried.
+
+#### 1.5 Cryptographic Time-Capsules
+
+Verifiable Delay Functions (VDF) intended to prevent decryption before a future target date, supposedly immune to administrative or physical coercion.
+
+- Construction: repeated squaring in an RSA group of unknown order, with a Wesolowski or Pietrzak proof so the delay is verifiable without redoing the work.
+- A real time-lock puzzle (Rivest–Shamir–Wagner) makes the key *the output*, so nobody can decrypt early without the sequential work — but that requires a trusted modulus-generation ceremony where **no one** retains φ(N). If the ceremony is compromised, the capsule opens instantly.
+
+**Honest rating: speculative, and the "immune to coercion" claim is wrong.** A VDF imposes *sequential work*, not a prohibition: an attacker holding the ciphertext and the wrapped key just decrypts, and parallel hardware shortens wall-clock delay. It also does nothing against coercion, because the ciphertext is sitting right there. Market it as **"delayed decryption"**, never as "cannot be decrypted before date X" or "coercion-proof". If you build it, build it as a puzzle whose key is the VDF output, and say plainly that it is a speed bump.
+
+#### 1.6 Dynamic Forensic Watermarking
+
+Translucent diagonal provenance stamps (`CONFIDENTIAL · user@email · IP · Date`) across previews and downloads, so a leaked copy points back to who received it.
+
+- Raster burn-in for images and PDF pages (Pillow / `pypdf` overlay / Ghostscript), generated **per request** so each recipient's copy differs.
+- HTML overlay for in-browser previews only — it is cosmetic and disappears from a screenshot-free copy/paste.
+- Vary position, angle and opacity per recipient so a crop or patch job does not remove every marker at once; keep the visible stamp plus a per-recipient id for attribution.
+- Never let a watermark generation failure silently fall back to an unwatermarked download.
+
+**Honest rating: medium.** It attributes leaks when the attacker is lazy; a determined one removes or blurs it. Value comes from deterrence and from the audit trail, not from robustness.
+
+#### 1.7 Shoulder-Surfer Privacy Guard
+
+Real-time CSS window blur on tab unfocus or inactivity, hover-to-peek redaction, and optional webcam glance detection.
+
+- `blur` on `window` `blur` / `visibilitychange` / a 60 s inactivity timer; reveal requires a deliberate action (click or hover), not an accidental mouse move.
+- Hover-to-peek uses `filter: blur(6px)` with `:hover`/`:focus-visible` removal — pure CSS, no JS state to leak.
+- Webcam glance detection (face/gaze heuristics) needs camera permission, is unreliable in poor light, and is invasive in an app whose whole purpose is privacy.
+
+**Honest rating: low — and explicitly not security.** CSS blur is a courtesy against a passer-by; it does not stop screenshots, screen recording, or a camera pointed at the screen. Ship the blur and the inactivity lock (cheap, no downside). Ship webcam detection **off by default**, opt-in, with a visible indicator, or omit it.
+
+#### 1.8 Cryptographic "Emergency Shredder"
+
+Multi-pass `/dev/urandom` key-salt overwriting triggered on repeated failed PINs or a duress code, permanently rendering data unrecoverable.
+
+- The reliable mechanism is **destroying the per-document DEK**, not overwriting file bytes. Once the wrapped key is gone, the ciphertext is noise — instant, and it works on every storage medium.
+- Overwrite remaining key material (salt, wrapped DEKs, any cached plaintext) with random bytes and `fsync`; delete the rows; then unlink the files.
+- Multi-pass overwriting of *user files* is unreliable on SSDs (wear levelling remaps blocks), on copy-on-write filesystems (btrfs/ZFS), under snapshots, and on any cloud/OneDrive-synced path — which is exactly where this project lives (`OneDrive\...\Secure-Vault-System`). Use full-disk encryption *plus* key destruction; do not promise "military-grade overwrite".
+- Duress code must open a **decoy vault that looks completely normal**, or the coercer learns they have been fooled. A duress path that visibly shreds is a duress path that gets you hurt.
+- Safeguards: typed confirmation, an explicit "no recovery possible" screen, a cool-off window (e.g. 24 h cancel link by email), and never triggering from an unauthenticated/IP-based heuristic.
+
+**Honest rating: medium via key destruction, low via overwrite.** The security property you can actually defend is "the key is gone"; the rest is folklore.
+
+### 2. Workstation & Usability Enhancements
+
+| # | Feature | What it adds | Honest caveat |
+|---|---|---|---|
+| 2.1 | **In-browser PDF viewer + signature pad** | No unencrypted file lands on disk just to be read or signed; signature captured on `<canvas>` and stored as an encrypted PNG attachment | A drawn signature is not a legally recognised e-signature without identity binding and an audit trail (signer, time, IP, document hash) — say so in the UI |
+| 2.2 | **Encrypted voice memo recorder** | `MediaRecorder` → WebM/Opus, **encrypted in the browser** before upload, so the server only ever stores ciphertext | Client-side encryption means the server cannot transcode or index audio; key management moves to the client |
+| 2.3 | **Password & secret credentials manager** | Encrypted entries per site, generator, copy-to-clipboard with auto-clear | Breach auditing uses HaveIBeenPwned's k-anonymity range API — only the **first 5 hex chars** of the SHA-1 leave the browser; never send a full hash or a password |
+| 2.4 | **Hierarchical custom folders + colour tags** | `parent_id` + materialized path, recursive counts, tags as a separate table so one document can carry several | Replaces today's "folders are inferred from document rows" hack, where an empty folder vanishes; needs its own migration |
+| 2.5 | **Multi-device session manager + kill switch** | A `Session` table (ip, user agent, created, last seen, revoked) with per-device revoke | Kill switch = delete the row **and** bump `session_version`; the second half is what actually invalidates a cookie already in the wild |
+| 2.6 | **Progressive Web App (PWA)** | Installable offline shell on desktop and mobile, plus a launcher icon | The service worker must cache **static assets only** — never vault pages or decrypted content, or "offline mode" becomes a plaintext cache on disk |
+
+### 3. Architecture & Implementation Matrix
+
+Every feature from this document, in build order. **Security rating** is the honest value of the control, not its ambition.
+
+| Feature | Defense vector | Security rating | Complexity | Phase |
+|---|---|---|---|---|
+| CSRF protection on all POSTs | Request forgery | **Critical** (prerequisite) | Low | 0 |
+| Owner-scoped download/preview (retire `/uploads/<filename>`) | IDOR / horizontal privilege escalation | **Critical** (prerequisite) | Low | 0 |
+| Encrypt documents at rest (per-doc DEK, wrapped) | At-rest disclosure, disk seizure | High | Medium | 0 |
+| Upload allowlist + magic-byte check | Malware, polyglot files | High | Low | 0 |
+| Security headers, CSP, secure cookies | XSS, clickjacking, MitM | High | Low | 0 |
+| In-browser PDF/image preview | Download hygiene, malware exposure | Medium | Low | 1 |
+| Trash with 30-day retention | Accidental loss, ransomware recovery | Medium | Low | 1 |
+| Email verification at registration | Account takeover, spam accounts | Medium | Low | 1 |
+| Permanent account deletion | Data minimisation, GDPR erasure | Medium | Low | 1 |
+| Expiring / password / one-time share links | Uncontrolled distribution, oversharing | High | Medium | 2 |
+| Share access history + revocation | Leak attribution, incident response | Medium | Low | 2 |
+| Multi-device session manager + kill switch | Session hijacking, stolen laptop | High | Medium | 2 |
+| Emergency Lockdown (6-action) | Active compromise | High | Medium | 2 |
+| Credentials manager + HIBP audit | Password reuse, credential stuffing | High | Medium | 2 |
+| Forensic watermarking (per-recipient) | Leak attribution, deterrence | Medium | Medium | 2 |
+| Hierarchical folders + colour tags | None direct (usability; prevents misfiling) | N/A | Medium | 2 |
+| Encrypted voice memos | At-rest audio disclosure | Medium | Medium | 3 |
+| Signature pad | Repudiation (weak) | Low | Low | 3 |
+| Shamir sharding of recovery key | Single point of key failure | High (conditional) | Medium | 3 |
+| Air-gapped portable HTML vault | Cold storage, offline access | High (passphrase-bound) | Medium | 3 |
+| PWA offline shell | Availability, UX | Low | Low | 3 |
+| Canary honey-files | Intrusion detection | Medium (detection only) | Medium | 4 |
+| Steganographic cloaked vault | Plausible deniability | Low (speculative) | High | 4 |
+| Cryptographic time-capsules (VDF) | Delayed decryption | Low (speculative) | Very high | 4 |
+| Shoulder-surfer blur / inactivity mask | Shoulder surfing | Low | Low | 4 |
+| Webcam glance detection | Shoulder surfing | Low, high privacy cost | High | 4 (opt-in) |
+| Emergency shredder | Coercion, physical seizure | Medium (key destruction) / Low (overwrite) | Medium | 4 (guarded) |
+
+**Phasing rules.** Phase 0 is a prerequisite for everything — a share link built on top of an unscoped `/uploads/<filename>` route leaks files by design. Phase 2 features depend on Phase 0's at-rest encryption, because "expiring link to an unencrypted file" protects the link, not the data. Phase 4 items are individually gated behind a written threat model and a documented rollback: nothing in Phase 4 may delete data irreversibly without a tested backup path.
+
+### Planned routes (advanced)
+
+| Route | Methods | Auth | Purpose |
+|---|---|---|---|
+| `/canary/<canary_id>.gif` | GET | — | Tracking beacon (1×1 GIF, always 200, rate limited) |
+| `/canary/create` | POST | ✅ | Generate a decoy document |
+| `/vault/export.html` | POST | ✅ | Build the air-gapped HTML vault |
+| `/vault/recovery/split` | POST | ✅ | Split the recovery key into (k, n) shards |
+| `/vault/shred` | POST | ✅ | Emergency shredder (typed confirmation + cool-off) |
+| `/sessions` | GET | ✅ | Multi-device session list |
+| `/sessions/<id>/revoke` | POST | ✅ | Per-device kill switch |
+| `/voice/upload` | POST | ✅ | Store a client-encrypted voice memo |
+| `/credentials` | GET | ✅ | Credentials manager |
+| `/credentials/<id>/audit` | POST | ✅ | HIBP k-anonymity breach check |
+| `/timecapsule/create` | POST | ✅ | Time-locked entry point (Phase 4) |
 
 ---
 

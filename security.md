@@ -21,6 +21,7 @@ This document describes how to protect the Secure Vault System (Flask 3, Flask-L
 9. [Malware & component exploits](#9-malware--component-exploits)
 10. [Verification & testing](#10-verification--testing)
 11. [Production deployment checklist](#11-production-deployment-checklist)
+12. [Appendix A — Coercion, insider and leak threats](#appendix-a--coercion-insider-and-leak-threats)
 
 ---
 
@@ -45,6 +46,10 @@ This document describes how to protect the Secure Vault System (Flask 3, Flask-L
 | XXE | Don't parse XML from users; `defusedxml` if you must | 8.4 |
 | Malware / ransomware | Extension + magic-byte allowlist, no execution, AV scan, offline backups | 9.1 |
 | Vulnerable components | Pinned deps, `pip-audit`, Dependabot, `bandit` | 9.2 |
+| Malicious insider / over-privileged admin | Per-user DEKs, least privilege, audit trail, no shared master key | App. A.1 |
+| Document leak by a recipient | Per-recipient watermarking, expiring single-use links, access history | App. A.2 |
+| Coercion / physical seizure | Key destruction (not byte overwrite), duress code with decoy vault, delayed decryption | App. A.3 |
+| Shoulder surfing / screen capture | Blur on unfocus, inactivity lock, hover-to-peek | App. A.4 |
 
 ---
 
@@ -872,6 +877,85 @@ def test_upload_rejects_exe(client_logged_in):
 - [ ] Logs centralised, alerts on repeated failed logins/lockouts/password resets
 - [ ] `pip-audit`, `bandit`, Dependabot, secret scanning running in CI
 - [ ] A documented incident plan: how to rotate `SECRET_KEY` / `ENCRYPTION_KEY`, revoke all sessions (bump `session_version`), and restore from backup
+
+---
+
+---
+
+## Appendix A — Coercion, insider and leak threats
+
+The main guide covers network and application attacks. The vault's more interesting threats are human: the admin who can read everything, the recipient who forwards the file, the person standing behind you, and the one who takes your laptop. This appendix scores the corresponding controls honestly, because half of the popular "advanced" features do not do what their names claim.
+
+### A.1 Malicious insider / over-privileged admin
+
+**The real problem.** A single application-level `ENCRYPTION_KEY` means anyone with shell access, a database dump, or the host's environment variables can decrypt every user's documents. No UI feature fixes that.
+
+Controls that actually work, in order of value:
+
+1. **Per-document data encryption keys.** Each `Document` gets a random DEK; bytes are AES-GCM encrypted under it; the DEK is stored *wrapped* under a key-encryption key. Stealing the database blob without the KEK yields nothing.
+2. **Separate keys per purpose** — session signing, note encryption, document KEK, share-token hashing salt. Never derive one from another (the current `ENCRYPTION_KEY`-from-`SECRET_KEY` fallback violates this; see §8.5).
+3. **Least privilege in the database** — the app user cannot read other schemas, cannot `COPY ... TO PROGRAM`, cannot alter audit tables.
+4. **Append-only audit trail** — a `SecurityLog`/`AuditEvent` table the app can insert into but not update or delete (separate DB role, or a trigger that rejects UPDATE/DELETE). Emergency Lockdown and the shredder depend on this.
+5. **Key custody outside the app** — KMS/HSM or a secrets manager, so a stolen environment file is not a stolen vault.
+
+**Shamir's Secret Sharing** genuinely removes the single point of failure for the *recovery* key — but only if the server holds at most one shard, shards live with independent holders, and reconstruction happens offline in a one-off tool rather than inside a web request. All n shards in one database is decoration.
+
+### A.2 Leak by a recipient
+
+Once a recipient has the bytes, you cannot un-share them. What you *can* do:
+
+- **Expiring, single-use, password-gated links** (see README §4) so access is bounded in time and count, and revocation takes effect on the next request.
+- **Per-recipient watermarking** — a visible provenance stamp plus a per-recipient id. Deters casual forwarding and attributes a leak; a determined attacker removes it. Never present it as tamper-proof.
+- **Access history** — who opened, when, from which IP. Detection and attribution, not prevention.
+- **Canary documents** — decoys that phone home when opened through the vault. Detection only, and useless for a file opened offline.
+
+State the limit plainly in the UI: a downloaded file is out of the vault's control.
+
+### A.3 Coercion and physical seizure
+
+**What works: key destruction.** Deleting the wrapped DEK makes the ciphertext permanently unreadable — instantly, on any medium, including SSDs, copy-on-write filesystems, snapshots, and a OneDrive-synced project folder. That is the only "shred" guarantee you can defend.
+
+**What does not work: multi-pass byte overwriting.** Wear levelling on SSDs remaps blocks, btrfs/ZFS copy-on-write keeps the old extent, snapshots and cloud sync keep versions, and `uploads/` inside a synced folder has already replicated off-machine. Multi-pass overwrite promises more than the storage layer can deliver; combine full-disk encryption with key destruction instead, and describe it accurately.
+
+**Duress design.** A duress code must open a **decoy vault that behaves normally**, otherwise the coercer learns the code was a duress code. If the duress path visibly destroys data, it escalates the situation it was meant to defuse. Practical rules:
+
+- The duress vault is populated, plausible, and equally functional.
+- Destructive actions never announce themselves; they are indistinguishable from a successful unlock until it is too late to matter.
+- The real vault's shred is triggered by key destruction plus a background job, not by a modal that says "shredding".
+- Never trigger destruction from an unauthenticated heuristic, an IP range, or a failed-login counter alone — that is a remote denial-of-service against the user's own data.
+
+**Time-capsules (VDF).** A Verifiable Delay Function imposes *sequential work*; it does not forbid early decryption to someone holding the ciphertext and the wrapped key, and parallel hardware shortens the wall-clock delay. Only a true time-lock puzzle whose key **is** the VDF output, with a trusted modulus ceremony where nobody retains φ(N), delays anyone at all — and even then it is a speed bump, not immunity, and certainly not immunity to coercion. Document it as "delayed decryption".
+
+**Plausible deniability (LSB steganography).** Hides a payload inside a lossless carrier; it does not hide the payload from statistical steganalysis, and it is undermined by the app's own database rows, the `uploads/` directory listing, and access logs. Deniability is a property of the whole system, not of one file format.
+
+### A.4 Shoulder surfing and screen capture
+
+- **Blur on `blur`/`visibilitychange`, inactivity lock, hover-to-peek** — cheap, no downside, and genuinely useful against a passer-by. It does **not** stop screenshots, screen recording, OS-level capture, or a phone camera.
+- **Webcam glance detection** — unreliable, needs camera permission, and is invasive in an app whose purpose is privacy. Off by default, opt-in, visibly indicated, or omitted.
+- **Watermarking** — helps if the on-screen content is photographed; it is not a capture control.
+
+Never claim any of these prevent exfiltration. They reduce casual exposure.
+
+### A.5 Feature honesty table
+
+| Claimed feature | Real security property | Verdict |
+|---|---|---|
+| Per-user / per-document DEKs | Database or host compromise does not yield plaintext | **Real** — build this first |
+| Shamir (k, n) recovery sharding | No single holder can reconstruct; no single failure loses the key | **Real** — if shards are truly independent and one-shot reconstruction is offline |
+| Air-gapped HTML vault | Offline access with no server trust | **Real** — bound by passphrase strength and by trusting the exported file |
+| Expiring / one-time / password links | Bounded, revocable distribution | **Real** — with atomic download counting |
+| Key destruction (shred by deleting DEK) | Ciphertext becomes permanently unreadable | **Real** |
+| Multi-pass byte overwrite | — | **Weak** — defeated by SSDs, CoW, snapshots, cloud sync |
+| Forensic watermarking | Attribution and deterrence | **Partial** — removable by a motivated attacker |
+| Canary honey-files | Detection of access through the vault | **Partial** — detection only; blind to offline copies |
+| LSB steganography | Hides a payload from casual inspection | **Weak** — detectable; deniability defeated by server metadata |
+| VDF time-capsules | Delays decryption of a puzzle | **Speculative** — no protection against key holders or coercion |
+| Shoulder-surfer blur | Reduces casual over-the-shoulder reading | **Cosmetic** |
+| Webcam glance detection | — | **Not recommended** — unreliable and privacy-hostile |
+
+### A.6 Prerequisites before any of this
+
+Nothing in this appendix is worth building on top of the current gaps. Fix these first (§2, Phase 1): CSRF on every POST, an owner-scoped replacement for `GET /uploads/<filename>`, document encryption at rest, an upload allowlist with magic-byte validation, and a durable (database- or Redis-backed) lockout instead of the in-memory tracker. A share link or a shredder layered over an unscoped file route is a nicer front door on an open house.
 
 ---
 
