@@ -111,37 +111,50 @@
 
   /* Folder page: one panel holds the uploader and the files. */
   body.folder-page .files-panel{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:
+      "doc-actions upload"
+      "doc-grid doc-grid";
+    align-items:center;
+    column-gap:16px;
+    row-gap:18px;
     background:var(--surface-soft);
     border:1.5px solid var(--border);
     border-radius:20px;
     padding:16px 18px 22px;
   }
+  /* The heading box disappears; its actions become the panel's top-left row. */
+  body.folder-page .doc-heading{display:contents;}
+  body.folder-page .doc-heading h2{display:none;}
+  body.folder-page .doc-heading .heading-actions{
+    grid-area:doc-actions;
+    justify-content:flex-start;
+  }
   body.folder-page .upload-panel{
+    grid-area:upload;
     width:max-content;
     max-width:100%;
-    margin:0 0 18px auto;
-    padding:8px 10px;
-    background:var(--surface);
-    border:1.5px solid var(--border);
-    border-radius:16px;
+    margin:0;
+    padding:0;
+    background:transparent;
+    border:none;
     text-align:right;
   }
   body.folder-page .upload-panel.dragover{
-    border-color:var(--purple);
     background:var(--purple-tint);
+    border-radius:12px;
   }
   body.folder-page .upload-panel > p{display:none;}
   body.folder-page .upload-row{justify-content:flex-end; gap:8px;}
+  body.folder-page #docGrid{grid-area:doc-grid;}
   /* Empty folder: the panel itself is the big centered dropzone. */
-  body.folder-page.folder-empty .files-panel{padding:0;}
+  body.folder-page.folder-empty .files-panel{display:block; padding:0;}
   body.folder-page.folder-empty .upload-panel{
     width:100%;
     margin:0;
     padding:56px 24px;
     text-align:center;
-    background:transparent;
-    border:none;
-    border-radius:20px;
   }
   body.folder-page.folder-empty .upload-panel > p{display:block;}
   body.folder-page.folder-empty .upload-row{justify-content:center;}
@@ -836,11 +849,118 @@
   .profile-menu a.menu-item:hover{background:var(--purple-tint); color:var(--purple);}
   .profile-menu a.menu-item.logout-item:hover{background:#FDEAEA; color:#D9433B;}
 
+  /* In-browser file preview */
+  .card.previewable{cursor:zoom-in;}
+  .preview-overlay{z-index:120; padding:0;}
+  .preview-card{
+    background:var(--surface);
+    border-radius:0;
+    width:100%;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  .preview-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    padding:14px 18px;
+    border-bottom:1px solid var(--border);
+    flex-shrink:0;
+  }
+  .preview-title{
+    font-size:14px;
+    font-weight:700;
+    color:var(--ink);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .preview-actions{display:flex; align-items:center; gap:10px; flex-shrink:0;}
+  .preview-download{
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--purple);
+    background:var(--purple-tint);
+    padding:7px 13px;
+    border-radius:999px;
+    text-decoration:none;
+  }
+  .preview-download:hover{background:#E2DBFB;}
+  .preview-close{position:static; flex-shrink:0;}
+  .preview-body{
+    flex:1;
+    min-height:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:var(--bg);
+    padding:14px;
+    overflow:auto;
+  }
+  .preview-body img{
+    max-width:100%;
+    max-height:100%;
+    object-fit:contain;
+    border-radius:8px;
+    display:block;
+  }
+  .preview-body iframe{
+    width:100%;
+    height:100%;
+    border:none;
+    border-radius:8px;
+    background:#fff;
+  }
+  .preview-fallback{
+    color:var(--muted);
+    font-size:14px;
+    text-align:center;
+    line-height:1.6;
+  }
+
+  /* Delete account */
+  .delete-warning{
+    background:#FDEAEA;
+    color:#B42820;
+    border:1px solid #FBDCDC;
+    border-radius:12px;
+    padding:12px 14px;
+    font-size:13px;
+    line-height:1.5;
+    margin:0 0 18px;
+  }
+  html[data-theme="dark"] .delete-warning{background:#3A1F20; color:#F17B75; border-color:#572326;}
+  .delete-error{
+    display:none;
+    background:#FDEAEA;
+    color:#D9433B;
+    border:1px solid #FBDCDC;
+    border-radius:10px;
+    padding:10px 12px;
+    font-size:12.5px;
+    margin-top:4px;
+  }
+  html[data-theme="dark"] .delete-error{background:#3A1F20; color:#F17B75; border-color:#572326;}
+  .field-group code{
+    background:var(--surface-soft);
+    color:var(--ink);
+    font-size:11.5px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    padding:2px 6px;
+    border-radius:6px;
+  }
+
   @media (max-width:600px){
     .title-block h1{font-size:23px;}
     header{align-items:stretch;}
     .search-bar{flex:1 1 auto;}
     .field-row{grid-template-columns:1fr;}
+    .preview-overlay{padding:0;}
+    .preview-card{width:100%; height:100%;}
   }
 </style>
 </head>
@@ -1081,6 +1201,55 @@
       </div>
       <a href="/change-password" class="btn-change-password">Change password</a>
     </div>
+
+    <div class="settings-section-title">Danger zone</div>
+    <div class="danger-row" style="border-color:var(--border);">
+      <div>
+        <div class="label">Delete Your account</div>
+        <div class="desc">Permanently erase your account, files, notes and photo.</div>
+      </div>
+      <button type="button" class="btn-danger" id="openDeleteAccountBtn">Delete account</button>
+    </div>
+  </div>
+</div>
+
+<!-- File preview modal -->
+<div class="modal-overlay preview-overlay" id="previewModal">
+  <div class="preview-card">
+    <div class="preview-head">
+      <div class="preview-title" id="previewTitle"></div>
+      <div class="preview-actions">
+        <a class="preview-download" id="previewDownload" href="#">⬇ Download</a>
+        <button type="button" class="modal-close preview-close" id="closePreviewBtn" aria-label="Close preview">✕</button>
+      </div>
+    </div>
+    <div class="preview-body" id="previewBody"></div>
+  </div>
+</div>
+
+<!-- Delete account modal -->
+<div class="modal-overlay" id="deleteAccountModal">
+  <div class="modal-card">
+    <button class="modal-close" id="closeDeleteAccountBtn" aria-label="Close">✕</button>
+    <h2>Delete account</h2>
+    <p class="delete-warning">This permanently erases your documents, notes, profile photo and the account itself. This cannot be undone.</p>
+
+    <div class="field-group">
+      <label for="deletePassword">Current password</label>
+      <input type="password" id="deletePassword" autocomplete="current-password" placeholder="Enter your current password">
+    </div>
+
+    <div class="field-group">
+      <label for="deletePhrase">Type <code>DELETE MY ACCOUNT</code> to confirm</label>
+      <input type="text" id="deletePhrase" autocomplete="off" spellcheck="false" placeholder="DELETE MY ACCOUNT">
+    </div>
+
+    <div class="delete-error" id="deleteError" role="alert"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="cancelDeleteAccountBtn">Cancel</button>
+      <button type="button" class="btn-danger" id="confirmDeleteAccountBtn">Delete permanently</button>
+    </div>
   </div>
 </div>
 
@@ -1129,6 +1298,11 @@
   const folderActions = document.getElementById('folderActions');
   const docCount = document.getElementById('docCount');
   const folderCount = document.getElementById('folderCount');
+  const previewModal = document.getElementById('previewModal');
+  const previewTitle = document.getElementById('previewTitle');
+  const previewBody = document.getElementById('previewBody');
+  const previewDownload = document.getElementById('previewDownload');
+  const closePreviewBtn = document.getElementById('closePreviewBtn');
 
   // Rebuild FOLDERS from the built-in list plus folders found on the user's documents
   function buildFolderList(){
@@ -1251,12 +1425,14 @@
       const folderMeta = FOLDERS.find(f => f.id.toLowerCase() === (doc.folder || '').toLowerCase()) || { name: doc.folder || 'My Files' };
       const card = document.createElement('div');
       const isSelected = selectedDocIds.has(doc.id);
-      card.className = 'card' + (docSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
+      const canPreview = !!previewKind(doc);
+      card.className = 'card' + (docSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '') + (canPreview && !docSelectMode ? ' previewable' : '');
       card.innerHTML = `
         <span class="select-check">${isSelected ? '✓' : ''}</span>
         <div class="top-row">
           <span class="icon-circle-sm">${fileIcon(doc.type, doc.name)}</span>
           <div class="card-actions">
+            ${canPreview ? `<button type="button" class="card-btn" title="Preview file" onclick="event.stopPropagation(); openPreviewById(${doc.id});">👁</button>` : ''}
             <a href="${doc.downloadUrl || '/documents/' + doc.id + '/download'}" class="card-btn" title="Download file" onclick="event.stopPropagation();">⬇</a>
             <button type="button" class="card-btn del" title="Remove document" onclick="event.stopPropagation(); deleteDocument(${doc.id});">✕</button>
           </div>
@@ -1267,15 +1443,66 @@
       `;
 
       card.addEventListener('click', () => {
-        if(!docSelectMode) return;
-        if(selectedDocIds.has(doc.id)) selectedDocIds.delete(doc.id);
-        else selectedDocIds.add(doc.id);
-        renderGrid();
-        updateDocSelectionUI();
+        if(docSelectMode){
+          if(selectedDocIds.has(doc.id)) selectedDocIds.delete(doc.id);
+          else selectedDocIds.add(doc.id);
+          renderGrid();
+          updateDocSelectionUI();
+          return;
+        }
+        if(canPreview) openPreview(doc);
       });
       docGrid.appendChild(card);
     });
   }
+
+  // --- In-browser preview (PDF / images only) ---
+  function previewKind(doc){
+    const name = ((doc && doc.name) || '').toLowerCase();
+    if(name.endsWith('.pdf')) return 'pdf';
+    if(/\.(png|jpe?g|gif|webp)$/.test(name)) return 'image';
+    return null;
+  }
+
+  function openPreview(doc){
+    const kind = previewKind(doc);
+    if(!kind) return;
+
+    previewTitle.textContent = doc.name || 'Preview';
+    previewDownload.href = doc.downloadUrl || `/documents/${doc.id}/download`;
+    previewBody.innerHTML = '';
+
+    const src = `/documents/${doc.id}/view`;
+    if(kind === 'pdf'){
+      const frame = document.createElement('iframe');
+      frame.src = src;
+      frame.title = doc.name || 'PDF preview';
+      previewBody.appendChild(frame);
+    } else {
+      const img = document.createElement('img');
+      img.src = src;
+      img.alt = doc.name || 'Image preview';
+      img.addEventListener('error', () => {
+        previewBody.innerHTML = '<p class="preview-fallback">This image could not be shown in the browser.<br>Use Download to open it.</p>';
+      });
+      previewBody.appendChild(img);
+    }
+
+    previewModal.classList.add('open');
+  }
+
+  function openPreviewById(id){
+    const doc = documents.find(d => d.id === id);
+    if(doc) openPreview(doc);
+  }
+
+  function closePreview(){
+    previewModal.classList.remove('open');
+    previewBody.innerHTML = '';
+  }
+
+  closePreviewBtn.addEventListener('click', closePreview);
+  previewModal.addEventListener('click', e => { if(e.target === previewModal) closePreview(); });
 
   function escapeHtml(str) {
     if(!str) return '';
@@ -1996,6 +2223,86 @@
     closeSettingsModal();
     if(!noteSelectMode) noteSelectToggle.click();
     notesGrid.scrollIntoView({ behavior:'smooth', block:'center' });
+  });
+
+  // --- Delete account (password + confirmation phrase) ---
+  const deleteAccountModal = document.getElementById('deleteAccountModal');
+  const openDeleteAccountBtn = document.getElementById('openDeleteAccountBtn');
+  const closeDeleteAccountBtn = document.getElementById('closeDeleteAccountBtn');
+  const cancelDeleteAccountBtn = document.getElementById('cancelDeleteAccountBtn');
+  const confirmDeleteAccountBtn = document.getElementById('confirmDeleteAccountBtn');
+  const deletePassword = document.getElementById('deletePassword');
+  const deletePhrase = document.getElementById('deletePhrase');
+  const deleteError = document.getElementById('deleteError');
+
+  function showDeleteError(message){
+    deleteError.textContent = message;
+    deleteError.style.display = 'block';
+  }
+
+  function openDeleteAccountModal(){
+    closeSettingsModal();
+    deletePassword.value = '';
+    deletePhrase.value = '';
+    deleteError.textContent = '';
+    deleteError.style.display = 'none';
+    confirmDeleteAccountBtn.disabled = false;
+    confirmDeleteAccountBtn.textContent = 'Delete permanently';
+    deleteAccountModal.classList.add('open');
+    setTimeout(() => deletePassword.focus(), 30);
+  }
+
+  function closeDeleteAccountModal(){
+    deleteAccountModal.classList.remove('open');
+  }
+
+  openDeleteAccountBtn.addEventListener('click', openDeleteAccountModal);
+  closeDeleteAccountBtn.addEventListener('click', closeDeleteAccountModal);
+  cancelDeleteAccountBtn.addEventListener('click', closeDeleteAccountModal);
+  deleteAccountModal.addEventListener('click', e => { if(e.target === deleteAccountModal) closeDeleteAccountModal(); });
+
+  confirmDeleteAccountBtn.addEventListener('click', async () => {
+    const password = deletePassword.value;
+    const phrase = deletePhrase.value.trim();
+    deleteError.textContent = '';
+    deleteError.style.display = 'none';
+
+    if(!password){
+      showDeleteError('Enter your current password.');
+      return;
+    }
+    if(phrase.toUpperCase() !== 'DELETE MY ACCOUNT'){
+      showDeleteError('Type "DELETE MY ACCOUNT" to confirm deletion.');
+      return;
+    }
+
+    confirmDeleteAccountBtn.disabled = true;
+    confirmDeleteAccountBtn.textContent = 'Deleting…';
+    try {
+      const res = await fetch('/account/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: password, phrase: phrase })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.status === 'ok'){
+        window.location.replace('/login');
+        return;
+      }
+      showDeleteError(data.message || 'Could not delete the account.');
+    } catch(err){
+      console.error(err);
+      showDeleteError('Network error. Please try again.');
+    }
+    confirmDeleteAccountBtn.disabled = false;
+    confirmDeleteAccountBtn.textContent = 'Delete permanently';
+  });
+
+  document.addEventListener('keydown', e => {
+    if(e.key !== 'Escape') return;
+    if(previewModal.classList.contains('open')) closePreview();
+    else if(deleteAccountModal.classList.contains('open')) closeDeleteAccountModal();
+    else if(settingsModal.classList.contains('open')) closeSettingsModal();
   });
 </script>
 <script src="{{ url_for('static', filename='js/flash.js') }}"></script>

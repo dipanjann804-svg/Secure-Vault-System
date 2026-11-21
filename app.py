@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from flask import (
     Flask, render_template, url_for, request, redirect, flash, 
-    send_from_directory, jsonify, abort
+    send_from_directory, send_file, jsonify, abort
 )
 from flask_login import (
     LoginManager, login_user, login_required, current_user, logout_user
@@ -25,7 +25,7 @@ from sqlalchemy import text, func, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
 
-from models import db, User, Document, Note, SecurityLog
+from models import db, User, Document, Note, ShareLink, SecurityLog
 from encryption import encrypt_note, decrypt_note
 from email_service import send_password_reset_email
 
@@ -35,6 +35,20 @@ login_manager = LoginManager()
 # folder from the "Add files" tile on the dashboard.
 ALLOWED_FOLDERS = ['Identity', 'Finance', 'Health', 'Legal']
 FALLBACK_FOLDER = 'My Files'
+
+# In-browser preview is restricted to these safe, non-executable types.
+PREVIEW_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp'}
+PREVIEW_MIME_TYPES = {
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+}
+
+# Phrase the user has to type before their account is erased.
+DELETE_ACCOUNT_PHRASE = 'DELETE MY ACCOUNT'
 
 # --- Login lockout policy (ported from time.py) ---
 MAX_ATTEMPTS = 6
@@ -714,6 +728,47 @@ def create_app():
             download_name=doc.original_filename
         )
 
+    @app.route("/documents/<int:doc_id>/view")
+    @login_required
+    def preview_document(doc_id):
+        """Owner-only in-browser preview for safe file types (no download)."""
+        doc = Document.query.filter_by(id=doc_id, user_id=current_user.id).first_or_404()
+
+        ext = os.path.splitext(doc.original_filename or doc.filename or "")[1].lower()
+        if ext not in PREVIEW_EXTENSIONS:
+            abort(415)
+        if not doc.file_path or not os.path.isfile(doc.file_path):
+            abort(404)
+
+        mimetype = PREVIEW_MIME_TYPES.get(ext)
+        if not mimetype:
+            abort(415)
+
+        response = send_file(
+            doc.file_path,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=doc.original_filename or "file",
+        )
+        safe_name = secure_filename(doc.original_filename or "") or "file"
+        response.headers["Content-Disposition"] = f'inline; filename="{safe_name}"'
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Cache-Control"] = "private, no-store"
+        if ext == ".pdf":
+            # Same-origin framing only; the PDF viewer runs without page scripts.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'"
+            )
+        else:
+            # Images are inert; sandbox them and forbid every external resource.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+            )
+        return response
+
     @app.route("/documents/delete", methods=["POST"])
     @login_required
     def delete_documents():
@@ -935,9 +990,82 @@ def create_app():
         flash("Profile updated successfully!", "success")
         return redirect(url_for("dashboard"))
 
+    @app.route("/account/delete", methods=["POST"])
+    @login_required
+    def delete_account():
+        """Permanently erase the signed-in user's account and everything it owns."""
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        password = data.get("password") or ""
+        phrase = (data.get("phrase") or "").strip()
+
+        def fail(message):
+            if request.is_json:
+                return jsonify({"status": "error", "message": message}), 400
+            flash(message, "error")
+            return redirect(url_for("dashboard"))
+
+        if not current_user.check_password(password):
+            return fail("Current password is incorrect.")
+        if phrase.upper() != DELETE_ACCOUNT_PHRASE:
+            return fail(f'Type "{DELETE_ACCOUNT_PHRASE}" to confirm deletion.')
+
+        user = current_user._get_current_object()
+        user_id = user.id
+        upload_folder = app.config['UPLOAD_FOLDER']
+
+        # Fixed deletion order: share links -> documents/files -> notes -> avatar -> account.
+        # 1) Share links
+        ShareLink.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+
+        # 2) Documents and the files they point at
+        for doc in Document.query.filter_by(user_id=user_id).all():
+            if doc.file_path and os.path.exists(doc.file_path):
+                try:
+                    os.remove(doc.file_path)
+                except OSError:
+                    pass
+            db.session.delete(doc)
+        db.session.flush()
+
+        # 3) Notes
+        for note in Note.query.filter_by(user_id=user_id).all():
+            db.session.delete(note)
+        db.session.flush()
+
+        # 4) Avatar
+        photo = user.profile_photo or ""
+        if photo.startswith("/uploads/"):
+            avatar_path = os.path.join(upload_folder, os.path.basename(photo))
+            if os.path.exists(avatar_path):
+                try:
+                    os.remove(avatar_path)
+                except OSError:
+                    pass
+        user.profile_photo = None
+
+        # Security logs are kept for auditing, but the identity is masked.
+        SecurityLog.query.filter_by(user_id=user_id).update(
+            {SecurityLog.user_id: None, SecurityLog.login_id: "deleted-account"},
+            synchronize_session=False,
+        )
+
+        # 5) The account itself
+        db.session.delete(user)
+        db.session.commit()
+
+        logout_user()
+        flash("Your account has been permanently deleted.", "success")
+
+        if request.is_json:
+            return jsonify({"status": "ok"})
+        return redirect(url_for("login"))
+
     @app.route('/uploads/<filename>')
     @login_required
     def uploaded_file(filename):
+        # Only the owner's own avatar is reachable here — never other uploads.
+        if not filename.startswith(f"avatar_{current_user.id}_"):
+            abort(404)
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
     return app
