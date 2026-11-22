@@ -346,14 +346,25 @@ def create_app():
                 attempts_remaining = max(0, MAX_ATTEMPTS - state.get("count", 0))
 
         if request.method == "POST":
-            login_id = (request.form.get("email") or "").strip()
-            password = request.form.get("password") or ""
+            if request.is_json:
+                data = request.get_json(silent=True) or {}
+                login_id = (data.get("email") or "").strip()
+                password = data.get("password") or ""
+            else:
+                login_id = (request.form.get("email") or "").strip()
+                password = request.form.get("password") or ""
             key = _lockout_key(login_id, request.remote_addr)
 
             # 1) Check active lockout first (time.py: "Too many failed attempts...")
             disp = _lockout_display(key)
             lockout_remaining = disp["remaining"]
             if lockout_remaining > 0:
+                if request.is_json:
+                    return jsonify({
+                        "status": "locked",
+                        "message": f"Too many failed attempts. Try again in {lockout_remaining} seconds.",
+                        "lockout_remaining": lockout_remaining
+                    }), 429
                 errors.append(
                     f"Too many failed attempts. Try again in {lockout_remaining} seconds."
                 )
@@ -396,6 +407,13 @@ def create_app():
                     except Exception:
                         db.session.rollback()
 
+                    if request.is_json:
+                        return jsonify({
+                            "status": "ok",
+                            "username": user.username,
+                            "name": user.name or user.username,
+                            "redirect": url_for("dashboard")
+                        })
                     flash("Logged in successfully!", "success")
                     return redirect(url_for("dashboard"))
                 else:
@@ -429,6 +447,13 @@ def create_app():
                         disp2 = {"lockout_total": locked_for or INITIAL_LOCKOUT,
                                  "next_lockout": state.get("lockout_duration", INITIAL_LOCKOUT),
                                  "display_round": state.get("round_number", 1)}
+
+                    if request.is_json:
+                        return jsonify({
+                            "status": "error",
+                            "message": errors[-1] if errors else "Invalid email or password",
+                            "lockout_remaining": lockout_remaining
+                        }), 401
 
                     return render_template(
                         "login.html",

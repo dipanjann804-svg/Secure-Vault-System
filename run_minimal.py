@@ -168,16 +168,40 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
-        # Simple check
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            email = data.get('email', '')
+            password = data.get('password', '')
+        else:
+            email = request.form.get('email', '')
+            password = request.form.get('password', '')
+
         conn = get_db()
-        row = conn.execute("SELECT * FROM user WHERE email = ?", (email.lower(),)).fetchone()
+        email_clean = (email or '').strip()
+        row = conn.execute(
+            "SELECT * FROM user WHERE LOWER(email) = ? OR LOWER(username) = ?",
+            (email_clean.lower(), email_clean.lower())
+        ).fetchone()
         conn.close()
+
         if row and check_password_hash(row['password_hash'], password):
-            login_user(_MinimalUser(row))
+            user = _MinimalUser(row)
+            login_user(user)
+            if request.is_json:
+                return jsonify({
+                    "status": "ok",
+                    "username": user.username,
+                    "name": user.name or user.username,
+                    "redirect": url_for('dashboard')
+                })
+            flash('Logged in successfully!', 'success')
             return redirect(url_for('dashboard'))
         else:
+            if request.is_json:
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid email or password"
+                }), 401
             flash('Invalid email or password')
     return render_template('login.html')
 

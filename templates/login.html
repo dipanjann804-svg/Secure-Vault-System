@@ -251,9 +251,210 @@
     .auth-card{padding:26px 20px 24px;}
     .auth-card h1{font-size:23px;}
   }
+
+  @keyframes shake{
+    0%, 100%{transform:translateX(0);}
+    20%, 60%{transform:translateX(-7px);}
+    40%, 80%{transform:translateX(7px);}
+  }
+
+  /* Attractive Login Animation Overlay */
+  .login-anim-overlay{
+    position:fixed;
+    inset:0;
+    z-index:99999;
+    background:rgba(18, 18, 24, 0.88);
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .login-anim-overlay.active{
+    display:flex;
+    opacity:1;
+  }
+  .login-anim-card{
+    background:var(--surface);
+    border:1.5px solid var(--border);
+    border-radius:28px;
+    padding:44px 38px;
+    width:90%;
+    max-width:420px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+    box-shadow:0 24px 60px rgba(0,0,0,0.45), 0 0 50px rgba(99, 102, 241, 0.25);
+    animation:cardEntrance .45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    position:relative;
+    overflow:hidden;
+  }
+  @keyframes cardEntrance{
+    from{opacity:0; transform:scale(0.88) translateY(24px);}
+    to{opacity:1; transform:scale(1) translateY(0);}
+  }
+  .vault-dial-wrap{
+    position:relative;
+    width:116px;
+    height:116px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin-bottom:22px;
+  }
+  .vault-dial-ring{
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    border:2.5px dashed var(--purple);
+    animation:ringRotate 6s linear infinite;
+    opacity:0.85;
+  }
+  .vault-dial-ring.inner{
+    inset:9px;
+    border:2px dotted var(--purple-dark);
+    animation:ringRotateReverse 4s linear infinite;
+    opacity:0.65;
+  }
+  @keyframes ringRotate{
+    from{transform:rotate(0deg);}
+    to{transform:rotate(360deg);}
+  }
+  @keyframes ringRotateReverse{
+    from{transform:rotate(360deg);}
+    to{transform:rotate(0deg);}
+  }
+  .vault-dial-core{
+    width:70px;
+    height:70px;
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 35%, var(--purple), var(--purple-dark));
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 0 30px rgba(99, 102, 241, 0.65);
+    position:relative;
+    z-index:2;
+  }
+  .anim-lock-icon{
+    font-size:32px;
+    display:inline-block;
+    transition:transform .35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .anim-lock-icon.unlocked{
+    transform:scale(1.22);
+    animation:unlockPop .5s ease forwards;
+  }
+  @keyframes unlockPop{
+    0%{transform:scale(1);}
+    50%{transform:scale(1.35) rotate(-14deg);}
+    100%{transform:scale(1.2) rotate(0deg);}
+  }
+  .access-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:5px 14px;
+    border-radius:999px;
+    background:rgba(34, 197, 94, 0.15);
+    color:#22C55E;
+    border:1px solid rgba(34, 197, 94, 0.35);
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    margin-bottom:14px;
+    animation:fadeIn .3s ease;
+  }
+  .access-badge .badge-dot{
+    width:7px;
+    height:7px;
+    border-radius:50%;
+    background:#22C55E;
+    box-shadow:0 0 8px #22C55E;
+    animation:pulseDot 1.2s infinite;
+  }
+  @keyframes pulseDot{
+    0%, 100%{opacity:1; transform:scale(1);}
+    50%{opacity:0.4; transform:scale(0.8);}
+  }
+  .anim-welcome-text{
+    font-size:14px;
+    color:var(--muted);
+    font-weight:500;
+    margin-bottom:4px;
+  }
+  .anim-username-display{
+    font-size:27px;
+    font-weight:800;
+    letter-spacing:-0.02em;
+    background:linear-gradient(135deg, var(--ink), var(--purple));
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    margin-top:2px;
+    animation:slideUp .45s ease forwards;
+  }
+  @keyframes slideUp{
+    from{opacity:0; transform:translateY(10px);}
+    to{opacity:1; transform:translateY(0);}
+  }
+  .anim-status-label{
+    font-size:13px;
+    color:var(--muted);
+    margin:16px 0 10px;
+    font-weight:500;
+  }
+  .anim-progress-track{
+    width:100%;
+    height:6px;
+    background:var(--surface-soft);
+    border-radius:999px;
+    overflow:hidden;
+    position:relative;
+    border:1px solid var(--border);
+  }
+  .anim-progress-bar{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg, var(--purple), #818cf8, #38bdf8);
+    border-radius:999px;
+    box-shadow:0 0 12px var(--purple);
+    transition:width 1.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
 </style>
 </head>
 <body>
+<!-- Login Animation Overlay -->
+<div class="login-anim-overlay" id="loginAnimOverlay" aria-live="assertive">
+  <div class="login-anim-card">
+    <div class="vault-dial-wrap">
+      <div class="vault-dial-ring"></div>
+      <div class="vault-dial-ring inner"></div>
+      <div class="vault-dial-core">
+        <span class="anim-lock-icon" id="animLockIcon">🔒</span>
+      </div>
+    </div>
+
+    <div class="access-badge">
+      <span class="badge-dot"></span> Access Granted
+    </div>
+
+    <div class="anim-welcome-text">
+      Welcome back,
+      <div class="anim-username-display" id="animUsernameDisplay">User</div>
+    </div>
+
+    <div class="anim-status-label" id="animStatusLabel">Decrypting secure vault…</div>
+
+    <div class="anim-progress-track">
+      <div class="anim-progress-bar" id="animProgressBar"></div>
+    </div>
+  </div>
+</div>
+
 <div class="auth-page">
   <div class="top-bar">
     <a class="brand-link" href="/"><span class="logo">🔒</span><span>Secure <span class="accent">Vault</span></span></a>
@@ -359,16 +560,105 @@
     toggleBtn.textContent = isPassword ? 'Hide' : 'Show';
   });
 
-  form.addEventListener('submit', (e) => {
+  function escapeHtml(str) {
+    if(!str) return '';
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
     let ok = true;
-    if(emailInput.value.trim().length === 0){ emailField.classList.add('error'); ok = false; }
+    const emailVal = emailInput.value.trim();
+    const passVal = passwordInput.value;
+
+    if(emailVal.length === 0){ emailField.classList.add('error'); ok = false; }
     else { emailField.classList.remove('error'); }
-    if(passwordInput.value.length === 0){ passwordField.classList.add('error'); ok = false; }
+    if(passVal.length === 0){ passwordField.classList.add('error'); ok = false; }
     else { passwordField.classList.remove('error'); }
-    if(!ok){ e.preventDefault(); return; }
+    if(!ok) return;
+
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Signing in…';
+    submitBtn.textContent = 'Authenticating…';
+
+    try {
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ email: emailVal, password: passVal })
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if(res.ok && data && data.status === 'ok'){
+        playLoginAnimation(data.username || emailVal, data.redirect || '/dashboard');
+      } else {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Log in →';
+        let errorMsg = (data && data.message) ? data.message : 'Invalid email or password.';
+        let flashBox = document.querySelector('.flash-container');
+        if(!flashBox){
+          flashBox = document.createElement('div');
+          flashBox.className = 'flash-container';
+          form.parentNode.insertBefore(flashBox, form);
+        }
+        flashBox.innerHTML = `
+          <div class="flash-alert flash-error">
+            <span>${escapeHtml(errorMsg)}</span>
+            <span class="flash-close" onclick="this.parentElement.remove()">✕</span>
+          </div>
+        `;
+        const authCard = document.querySelector('.auth-card');
+        if(authCard){
+          authCard.style.animation = 'none';
+          void authCard.offsetWidth;
+          authCard.style.animation = 'shake .35s ease';
+        }
+      }
+    } catch(err){
+      console.error(err);
+      form.submit();
+    }
   });
+
+  function playLoginAnimation(username, redirectUrl){
+    const overlay = document.getElementById('loginAnimOverlay');
+    const userDisplay = document.getElementById('animUsernameDisplay');
+    const lockIcon = document.getElementById('animLockIcon');
+    const statusLabel = document.getElementById('animStatusLabel');
+    const progressBar = document.getElementById('animProgressBar');
+
+    userDisplay.textContent = username;
+    try { sessionStorage.setItem('vault_just_logged_in', username); } catch(e) {}
+    overlay.classList.add('active');
+
+    // Step 1: Initial progress
+    setTimeout(() => {
+      if(progressBar) progressBar.style.width = '45%';
+    }, 50);
+
+    // Step 2: Unlock the vault icon with animation
+    setTimeout(() => {
+      if(lockIcon){
+        lockIcon.textContent = '🔓';
+        lockIcon.classList.add('unlocked');
+      }
+      if(statusLabel) statusLabel.textContent = 'Access granted • Decrypting vault…';
+      if(progressBar) progressBar.style.width = '82%';
+    }, 450);
+
+    // Step 3: Complete progress and transition
+    setTimeout(() => {
+      if(progressBar) progressBar.style.width = '100%';
+      if(statusLabel) statusLabel.textContent = 'Vault decrypted! Opening dashboard…';
+    }, 1150);
+
+    setTimeout(() => {
+      window.location.href = redirectUrl;
+    }, 1750);
+  }
 
   [emailInput, passwordInput].forEach((input) => {
     input.addEventListener('input', () => input.closest('.field-group').classList.remove('error'));

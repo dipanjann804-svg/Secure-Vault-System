@@ -2504,6 +2504,23 @@
     else if(deleteAccountModal.classList.contains('open')) closeDeleteAccountModal();
     else if(settingsModal.classList.contains('open')) closeSettingsModal();
   });
+
+  // Welcome banner on login
+  (function checkJustLoggedIn(){
+    try {
+      const username = sessionStorage.getItem('vault_just_logged_in');
+      if(username){
+        sessionStorage.removeItem('vault_just_logged_in');
+        const banner = document.createElement('div');
+        banner.className = 'flash-alert flash-success';
+        banner.style.cssText = 'position:fixed; top:24px; right:24px; z-index:9999; box-shadow:0 10px 30px rgba(0,0,0,0.3); animation:pop .25s ease; display:flex; align-items:center; gap:10px;';
+        banner.innerHTML = `<span>👋 Welcome back, <strong>@${escapeHtml(username)}</strong>! Vault unlocked.</span><span class="flash-close" style="cursor:pointer; margin-left:12px;">✕</span>`;
+        banner.querySelector('.flash-close').onclick = () => banner.remove();
+        document.body.appendChild(banner);
+        setTimeout(() => { if(banner.parentNode) banner.remove(); }, 4000);
+      }
+    } catch(e) {}
+  })();
 </script>
 <script src="{{ url_for('static', filename='js/flash.js') }}"></script>
 </body>
