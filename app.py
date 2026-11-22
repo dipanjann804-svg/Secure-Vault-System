@@ -889,10 +889,12 @@ def create_app():
             flash("Note content cannot be empty", "error")
             return redirect(url_for("dashboard"))
 
+        title_str = str(title).strip() or "Quick Note"
+
         encrypted_content = encrypt_note(str(content).strip())
         note = Note(
             user_id=current_user.id,
-            title=str(title).strip() or "Quick Note",
+            title=title_str,
             content=encrypted_content
         )
         db.session.add(note)

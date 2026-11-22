@@ -736,6 +736,25 @@
     padding:18px;
     margin-bottom:18px;
   }
+  .note-title-input{
+    width:100%;
+    border:none;
+    border-bottom:1.5px dashed var(--yellow-border);
+    background:transparent;
+    font-family:inherit;
+    font-size:15px;
+    font-weight:600;
+    color:var(--ink);
+    outline:none;
+    padding:2px 0 8px;
+    margin-bottom:12px;
+    transition:border-color .15s ease;
+  }
+  .note-title-input:focus{
+    border-bottom-style:solid;
+    border-bottom-color:var(--purple);
+  }
+  .note-title-input::placeholder{color:#A79A5C; font-weight:500;}
   .notepad-composer textarea{
     width:100%;
     min-height:70px;
@@ -751,12 +770,19 @@
   .notepad-composer textarea::placeholder{color:#A79A5C;}
   .notepad-composer-row{
     display:flex;
-    justify-content:flex-end;
+    justify-content:space-between;
+    align-items:center;
     margin-top:10px;
+    flex-wrap:wrap;
+    gap:10px;
+  }
+  .notepad-composer-hint{
+    font-size:12px;
+    color:#A79A5C;
   }
   .notes-grid{
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
+    grid-template-columns:repeat(auto-fill, minmax(240px,1fr));
     gap:14px;
   }
   .note-card{
@@ -766,15 +792,69 @@
     padding:16px;
     position:relative;
     animation: pop .18s ease;
+    cursor:pointer;
+    display:flex;
+    flex-direction:column;
+    justify-content:space-between;
+    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   }
-  .note-card p.note-text{
-    font-size:13.5px;
-    line-height:1.5;
+  .note-card:hover{
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    border-color: var(--purple);
+  }
+  .note-card-header{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:8px;
+  }
+  .note-card-title{
+    font-size:14.5px;
+    font-weight:700;
     color:var(--ink);
-    margin:0 0 12px;
-    white-space:pre-wrap;
-    word-break:break-word;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex:1;
+    min-width:0;
   }
+  .note-privacy-badge{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:12px;
+    font-weight:500;
+    color:#A79A5C;
+    background:rgba(0,0,0,0.14);
+    border-radius:8px;
+    padding:8px 10px;
+    margin:6px 0 12px;
+    border:1px dashed var(--yellow-border);
+  }
+  html[data-theme="light"] .note-privacy-badge{
+    background:rgba(0,0,0,0.03);
+  }
+  .note-privacy-badge .lock-icon{
+    font-size:13px;
+  }
+  .note-view-link{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    background:none;
+    border:none;
+    padding:0;
+    font-size:12px;
+    font-weight:600;
+    color:var(--purple);
+    cursor:pointer;
+  }
+  .note-view-link:hover{text-decoration:underline;}
   .note-card .note-meta{
     font-size:11.5px;
     color:#8A7B3E;
@@ -783,15 +863,17 @@
     padding-top:8px;
   }
   .note-card .note-actions{
-    position:absolute; top:10px; right:10px;
     display:flex; gap:4px;
+    flex-shrink:0;
   }
   .note-card .note-actions button{
     background:none;border:none;cursor:pointer;
     color:#B5A968; font-size:13px; line-height:1;
     padding:5px 7px;
     border-radius:50%;
+    transition: background .15s ease, color .15s ease;
   }
+  .note-card .note-actions .view:hover{color:#fff; background:var(--purple);}
   .note-card .note-actions .download:hover{color:#fff; background:var(--purple);}
   .note-card .note-actions .del:hover{color:#fff; background:#EF4444;}
   .notes-empty{
@@ -1056,8 +1138,10 @@
       </div>
     </div>
     <div class="notepad-composer">
-      <textarea id="noteInput" placeholder="Add a quick note… (Encrypted securely in database)"></textarea>
+      <input type="text" id="noteTitleInput" class="note-title-input" placeholder="Note Title (e.g. Passwords, Meeting Notes, Checklist…)" maxlength="120" autocomplete="off">
+      <textarea id="noteInput" placeholder="Write private note content… (Encrypted securely in database)"></textarea>
       <div class="notepad-composer-row">
+        <span class="notepad-composer-hint">🔒 Encrypted in vault • Content is hidden on dashboard for privacy</span>
         <button class="btn-primary" id="saveNoteBtn">Save note</button>
       </div>
     </div>
@@ -1224,6 +1308,26 @@
       </div>
     </div>
     <div class="preview-body" id="previewBody"></div>
+  </div>
+</div>
+
+<!-- Note View Modal -->
+<div class="modal-overlay preview-overlay" id="noteModal">
+  <div class="preview-card" style="max-width:580px;">
+    <div class="preview-head">
+      <div style="min-width:0; flex:1;">
+        <div class="preview-title" id="noteModalTitle" style="font-size:17px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+        <div id="noteModalDate" style="font-size:12px; color:var(--muted); margin-top:2px;"></div>
+      </div>
+      <div class="preview-actions" style="gap:8px;">
+        <button type="button" class="preview-download" id="copyNoteContentBtn" style="cursor:pointer; background:var(--surface-soft); border:1px solid var(--border); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; color:var(--ink);">📋 Copy</button>
+        <button type="button" class="preview-download" id="downloadNoteModalBtn" style="cursor:pointer; background:var(--surface-soft); border:1px solid var(--border); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; color:var(--ink);">⬇ Download</button>
+        <button type="button" class="modal-close preview-close" id="closeNoteModalBtn" aria-label="Close note">✕</button>
+      </div>
+    </div>
+    <div class="preview-body" style="padding:22px 24px; overflow-y:auto; max-height:calc(80vh - 110px);">
+      <div id="noteModalContent" style="white-space:pre-wrap; word-break:break-word; font-size:14.5px; line-height:1.6; color:var(--ink); font-family:inherit;"></div>
+    </div>
   </div>
 </div>
 
@@ -1836,9 +1940,71 @@
   ];
 
   const notesGrid = document.getElementById('notesGrid');
+  const noteTitleInput = document.getElementById('noteTitleInput');
   const noteInput = document.getElementById('noteInput');
+  const noteModal = document.getElementById('noteModal');
+  const noteModalTitle = document.getElementById('noteModalTitle');
+  const noteModalDate = document.getElementById('noteModalDate');
+  const noteModalContent = document.getElementById('noteModalContent');
+  const closeNoteModalBtn = document.getElementById('closeNoteModalBtn');
+  const copyNoteContentBtn = document.getElementById('copyNoteContentBtn');
+  const downloadNoteModalBtn = document.getElementById('downloadNoteModalBtn');
+  let currentActiveNote = null;
   let noteSelectMode = false;
   let selectedNoteIds = new Set();
+
+  function openNoteModal(note){
+    currentActiveNote = note;
+    noteModalTitle.textContent = note.title || 'Note Details';
+    noteModalDate.textContent = note.addedAt ? `Created: ${note.addedAt}` : '';
+    noteModalContent.textContent = note.text || '';
+    if(copyNoteContentBtn) copyNoteContentBtn.textContent = '📋 Copy';
+    noteModal.classList.add('open');
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeNoteModal(){
+    noteModal.classList.remove('open');
+    currentActiveNote = null;
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+  }
+
+  if(closeNoteModalBtn) closeNoteModalBtn.addEventListener('click', closeNoteModal);
+  if(noteModal) noteModal.addEventListener('click', e => { if(e.target === noteModal) closeNoteModal(); });
+
+  if(copyNoteContentBtn){
+    copyNoteContentBtn.addEventListener('click', () => {
+      if(!currentActiveNote || !currentActiveNote.text) return;
+      navigator.clipboard.writeText(currentActiveNote.text).then(() => {
+        copyNoteContentBtn.textContent = '✓ Copied!';
+        setTimeout(() => { if(copyNoteContentBtn) copyNoteContentBtn.textContent = '📋 Copy'; }, 2000);
+      }).catch(() => {
+        alert('Could not copy to clipboard.');
+      });
+    });
+  }
+
+  if(downloadNoteModalBtn){
+    downloadNoteModalBtn.addEventListener('click', () => {
+      if(!currentActiveNote) return;
+      downloadNoteAsFile(currentActiveNote);
+    });
+  }
+
+  function downloadNoteAsFile(note){
+    const blob = new Blob([note.text || ''], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const cleanTitle = (note.title || 'note').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/(^-|-$)/g, '');
+    a.download = `${cleanTitle || 'note'}-${(note.addedAt || 'saved').replace(/[\s,:]+/g,'-')}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   function renderNotes(){
     notesGrid.innerHTML = '';
@@ -1850,38 +2016,57 @@
       const card = document.createElement('div');
       const isSelected = selectedNoteIds.has(note.id);
       card.className = 'note-card' + (noteSelectMode ? ' select-mode' : '') + (isSelected ? ' selected' : '');
+
+      const displayTitle = escapeHtml(note.title || 'Untitled Note');
+
       card.innerHTML = `
         <span class="select-check">${isSelected ? '✓' : ''}</span>
-        <div class="note-actions">
-          <button type="button" class="download" title="Download note">⬇</button>
-          <button type="button" class="del" title="Delete note">✕</button>
+        <div class="note-card-header">
+          <div class="note-card-title">
+            <span aria-hidden="true">📝</span>
+            <span>${displayTitle}</span>
+          </div>
+          <div class="note-actions">
+            <button type="button" class="view" title="View note">👁</button>
+            <button type="button" class="download" title="Download note">⬇</button>
+            <button type="button" class="del" title="Delete note">✕</button>
+          </div>
         </div>
-        <p class="note-text"></p>
-        <div class="note-meta"><span>${note.addedAt || ''}</span></div>
+        <div class="note-privacy-badge">
+          <span class="lock-icon">🔒</span>
+          <span>Encrypted content • Click to view</span>
+        </div>
+        <div class="note-meta">
+          <button type="button" class="note-view-link">View note →</button>
+          <span>${note.addedAt || ''}</span>
+        </div>
       `;
-      card.querySelector('.note-text').textContent = note.text;
+
+      card.querySelector('.view').onclick = (e) => {
+        e.stopPropagation();
+        openNoteModal(note);
+      };
+      card.querySelector('.note-view-link').onclick = (e) => {
+        e.stopPropagation();
+        openNoteModal(note);
+      };
       card.querySelector('.download').onclick = (e) => {
         e.stopPropagation();
-        const blob = new Blob([note.text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `note-${(note.addedAt || 'saved').replace(/[\s,:]+/g,'-')}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        downloadNoteAsFile(note);
       };
       card.querySelector('.del').onclick = (e) => {
         e.stopPropagation();
         deleteSingleNote(note.id);
       };
       card.addEventListener('click', () => {
-        if(!noteSelectMode) return;
-        if(selectedNoteIds.has(note.id)) selectedNoteIds.delete(note.id);
-        else selectedNoteIds.add(note.id);
-        renderNotes();
-        updateNoteSelectionUI();
+        if(noteSelectMode){
+          if(selectedNoteIds.has(note.id)) selectedNoteIds.delete(note.id);
+          else selectedNoteIds.add(note.id);
+          renderNotes();
+          updateNoteSelectionUI();
+        } else {
+          openNoteModal(note);
+        }
       });
       notesGrid.appendChild(card);
     });
@@ -1895,6 +2080,7 @@
   async function saveNote(){
     const text = noteInput.value.trim();
     if(!text) return;
+    const titleVal = noteTitleInput ? noteTitleInput.value.trim() : '';
 
     const saveBtn = document.getElementById('saveNoteBtn');
     saveBtn.disabled = true;
@@ -1905,7 +2091,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: 'Quick Note',
+          title: titleVal,
           content: text
         })
       });
@@ -1917,6 +2103,7 @@
           text: data.note.content,
           addedAt: data.note.created_at
         });
+        if(noteTitleInput) noteTitleInput.value = '';
         noteInput.value = '';
         renderNotes();
       } else {
@@ -1980,6 +2167,14 @@
   }
 
   document.getElementById('saveNoteBtn').onclick = saveNote;
+  if(noteTitleInput){
+    noteTitleInput.addEventListener('keydown', e => {
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        noteInput.focus();
+      }
+    });
+  }
   noteInput.addEventListener('keydown', e => {
     if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -2304,7 +2499,8 @@
 
   document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
-    if(previewModal.classList.contains('open')) closePreview();
+    if(noteModal && noteModal.classList.contains('open')) closeNoteModal();
+    else if(previewModal.classList.contains('open')) closePreview();
     else if(deleteAccountModal.classList.contains('open')) closeDeleteAccountModal();
     else if(settingsModal.classList.contains('open')) closeSettingsModal();
   });
