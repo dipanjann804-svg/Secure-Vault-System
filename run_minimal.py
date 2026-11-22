@@ -348,17 +348,51 @@ def register():
 @app.route('/notes/add', methods=['POST'])
 @login_required
 def add_note():
-    title = request.form.get('title', '')
-    content = request.form.get('content', '')
-    if not content or not str(content).strip():
+    """Create a note from either a JSON fetch() call or a classic form post."""
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        title = (payload.get('title') or '').strip()
+        content = payload.get('content') or ''
+    else:
+        title = (request.form.get('title') or '').strip()
+        content = request.form.get('content') or ''
+
+    title = title or 'Quick Note'
+
+    if not str(content).strip():
+        if request.is_json:
+            return jsonify({"status": "error", "message": "Note content cannot be empty"}), 400
         flash('Note content cannot be empty')
         return redirect(url_for('dashboard'))
+
     conn = get_db()
-    conn.execute("INSERT INTO note (user_id, title, content) VALUES (?, ?, ?)",
-                 (current_user.id, title, content))
+    cur = conn.execute(
+        "INSERT INTO note (user_id, title, content) VALUES (?, ?, ?)",
+        (current_user.id, title, content),
+    )
     conn.commit()
+    note_id = cur.lastrowid
+    row = conn.execute(
+        "SELECT id, title, content, created_at FROM note WHERE id = ?", (note_id,)
+    ).fetchone()
     conn.close()
-    flash('Note saved and encrypted successfully!')
+
+    dt = _parse_dt(row['created_at']) if row else None
+    created_at = dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+
+    if request.is_json:
+        # dashboard.html expects {status, note:{id,title,content,created_at}}
+        return jsonify({
+            "status": "ok",
+            "note": {
+                "id": row['id'] if row else note_id,
+                "title": (row['title'] if row else title) or 'Quick Note',
+                "content": (row['content'] if row else content) or '',
+                "created_at": created_at,
+            },
+        })
+
+    flash('Note saved successfully!')
     return redirect(url_for('dashboard'))
 
 @app.route('/documents/upload', methods=['POST'])
