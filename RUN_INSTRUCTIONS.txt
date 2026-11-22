@@ -1,0 +1,30 @@
+Secure Vault System - Quick Run
+================================
+
+1. cd "C:\Users\User\Desktop\Secure-Vault-System"
+2. python run_minimal.py
+3. Open http://127.0.0.1:5555
+
+Why not `python app.py`?
+  Windows Application Control blocks SQLAlchemy's _collections_cy.pyd.
+  run_minimal.py uses Flask + built-in sqlite3, so no blocked DLL is loaded.
+
+Fixed in run_minimal.py:
+  * Preview: GET /documents/<id>/view renders PDF/PNG/JPG/GIF/WEBP inline.
+  * Download: GET /documents/<id>/download always sends the original file,
+    even for older database rows with a stale path.
+  * Dashboard: full context is passed, so no Jinja Undefined value ever
+    reaches |tojson ("Object of type Undefined is not JSON serializable").
+
+If preview or download still looks broken:
+  1. Make sure only ONE server is running. This runner now refuses to start
+     a second copy on the same port and prints "PORT 5555 IS ALREADY IN USE".
+  2. Check which build your browser is using: http://127.0.0.1:5555/health/db
+     It must show "minimal-2 (preview + robust download)".
+  3. Hard-refresh the dashboard (Ctrl+F5) to drop cached JavaScript.
+  4. To stop every stray server at once (PowerShell):
+       Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+         Where-Object { $_.CommandLine -like '*run_minimal*' } |
+         ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+See MINIMAL_GUIDE.md for the full route list and details.
