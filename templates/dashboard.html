@@ -1036,6 +1036,90 @@
     border-radius:6px;
   }
 
+  /* Share link modal */
+  .share-file-name{
+    font-size:13.5px;
+    color:var(--muted);
+    margin:-12px 0 18px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .share-options{display:flex; flex-direction:column; gap:18px; margin-bottom:18px;}
+  .share-option-title{
+    display:block;
+    font-size:12px;
+    font-weight:700;
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .choice-row{display:flex; gap:8px; flex-wrap:wrap;}
+  .choice{position:relative; flex:1 1 0; min-width:96px;}
+  .choice input{position:absolute; opacity:0; pointer-events:none;}
+  .choice span{
+    display:block;
+    text-align:center;
+    font-size:13px;
+    font-weight:500;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:12px;
+    padding:10px 8px;
+    cursor:pointer;
+    transition:border-color .15s ease, background .15s ease, color .15s ease;
+  }
+  .choice input:checked + span{
+    border-color:var(--purple);
+    background:var(--purple-tint);
+    color:var(--purple);
+    font-weight:700;
+  }
+  .choice input:focus-visible + span{outline:2px solid var(--purple); outline-offset:2px;}
+  .share-result{display:none;}
+  .share-result.open{display:block;}
+  .share-once-warning{
+    background:var(--yellow-tint);
+    border:1px solid var(--yellow-border);
+    color:#8A6D1F;
+    border-radius:12px;
+    padding:11px 13px;
+    font-size:12.5px;
+    line-height:1.5;
+    margin:0 0 14px;
+  }
+  html[data-theme="dark"] .share-once-warning{color:#F2D27A;}
+  .share-link-row{display:flex; gap:8px; align-items:stretch;}
+  .share-link-row input{
+    flex:1;
+    min-width:0;
+    font-family:inherit;
+    font-size:12.5px;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:12px;
+    padding:10px 12px;
+    outline:none;
+  }
+  .copy-btn{
+    flex-shrink:0;
+    font-family:inherit;
+    font-size:13px;
+    font-weight:600;
+    color:var(--purple);
+    background:var(--purple-tint);
+    border:none;
+    border-radius:12px;
+    padding:0 16px;
+    cursor:pointer;
+  }
+  .copy-btn:hover{background:#E2DBFB;}
+  .share-copied{font-size:12px; color:#15803D; min-height:16px; margin:8px 0 0;}
+  html[data-theme="dark"] .share-copied{color:#4ADE80;}
+
   @media (max-width:600px){
     .title-block h1{font-size:23px;}
     header{align-items:stretch;}
@@ -1331,6 +1415,54 @@
   </div>
 </div>
 
+<!-- Share link modal -->
+<div class="modal-overlay" id="shareModal">
+  <div class="modal-card">
+    <button class="modal-close" id="closeShareBtn" aria-label="Close">✕</button>
+    <h2>Share file</h2>
+    <p class="share-file-name" id="shareFileName"></p>
+
+    <div id="shareForm">
+      <div class="share-options">
+        <div class="share-option-group">
+          <span class="share-option-title">Link expires after</span>
+          <div class="choice-row">
+            <label class="choice"><input type="radio" name="shareExpiry" value="10m"><span>10 minutes</span></label>
+            <label class="choice"><input type="radio" name="shareExpiry" value="1h" checked><span>1 hour</span></label>
+            <label class="choice"><input type="radio" name="shareExpiry" value="24h"><span>24 hours</span></label>
+          </div>
+        </div>
+        <div class="share-option-group">
+          <span class="share-option-title">Downloads</span>
+          <div class="choice-row">
+            <label class="choice"><input type="radio" name="shareUsage" value="once"><span>One time</span></label>
+            <label class="choice"><input type="radio" name="shareUsage" value="multi" checked><span>Multiple times</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="delete-error" id="shareError" role="alert"></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="cancelShareBtn">Cancel</button>
+        <button type="button" class="btn-primary" id="createShareBtn">Create link</button>
+      </div>
+    </div>
+
+    <div class="share-result" id="shareResult">
+      <p class="share-once-warning">Copy this link now — it will not be shown again. Only a hashed version is stored on the server.</p>
+      <div class="share-link-row">
+        <input type="text" id="shareLinkInput" readonly aria-label="Share link">
+        <button type="button" class="copy-btn" id="copyShareBtn">Copy</button>
+      </div>
+      <p class="share-copied" id="shareCopied"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn-primary" id="doneShareBtn">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Delete account modal -->
 <div class="modal-overlay" id="deleteAccountModal">
   <div class="modal-card">
@@ -1407,6 +1539,18 @@
   const previewBody = document.getElementById('previewBody');
   const previewDownload = document.getElementById('previewDownload');
   const closePreviewBtn = document.getElementById('closePreviewBtn');
+  const shareModal = document.getElementById('shareModal');
+  const shareFileName = document.getElementById('shareFileName');
+  const shareForm = document.getElementById('shareForm');
+  const shareResult = document.getElementById('shareResult');
+  const shareLinkInput = document.getElementById('shareLinkInput');
+  const shareCopied = document.getElementById('shareCopied');
+  const shareError = document.getElementById('shareError');
+  const closeShareBtn = document.getElementById('closeShareBtn');
+  const cancelShareBtn = document.getElementById('cancelShareBtn');
+  const doneShareBtn = document.getElementById('doneShareBtn');
+  const copyShareBtn = document.getElementById('copyShareBtn');
+  const createShareBtn = document.getElementById('createShareBtn');
 
   // Rebuild FOLDERS from the built-in list plus folders found on the user's documents
   function buildFolderList(){
@@ -1537,6 +1681,7 @@
           <span class="icon-circle-sm">${fileIcon(doc.type, doc.name)}</span>
           <div class="card-actions">
             ${canPreview ? `<button type="button" class="card-btn" title="Preview file" onclick="event.stopPropagation(); openPreviewById(${doc.id});">👁</button>` : ''}
+            <button type="button" class="card-btn" title="Share file" onclick="event.stopPropagation(); openShareById(${doc.id});">🔗</button>
             <a href="${doc.downloadUrl || '/documents/' + doc.id + '/download'}" class="card-btn" title="Download file" onclick="event.stopPropagation();">⬇</a>
             <button type="button" class="card-btn del" title="Remove document" onclick="event.stopPropagation(); deleteDocument(${doc.id});">✕</button>
           </div>
@@ -1611,6 +1756,101 @@
 
   closePreviewBtn.addEventListener('click', closePreview);
   previewModal.addEventListener('click', e => { if(e.target === previewModal) closePreview(); });
+
+  // --- Expiring share links ---
+  let shareDoc = null;
+
+  function openShareModal(doc){
+    shareDoc = doc;
+    shareFileName.textContent = doc.name || '';
+    shareForm.style.display = 'block';
+    shareResult.classList.remove('open');
+    shareLinkInput.value = '';
+    shareCopied.textContent = '';
+    shareError.textContent = '';
+    shareError.style.display = 'none';
+    createShareBtn.disabled = false;
+    createShareBtn.textContent = 'Create link';
+    const oneHour = document.querySelector('input[name="shareExpiry"][value="1h"]');
+    const multi = document.querySelector('input[name="shareUsage"][value="multi"]');
+    if(oneHour) oneHour.checked = true;
+    if(multi) multi.checked = true;
+    shareModal.classList.add('open');
+  }
+
+  function openShareById(id){
+    const doc = documents.find(d => d.id === id);
+    if(doc) openShareModal(doc);
+  }
+
+  function closeShareModal(){
+    shareModal.classList.remove('open');
+    shareDoc = null;
+    shareResult.classList.remove('open');
+    shareLinkInput.value = '';
+    shareCopied.textContent = '';
+    shareError.textContent = '';
+    shareError.style.display = 'none';
+  }
+
+  function showShareError(message){
+    shareError.textContent = message;
+    shareError.style.display = 'block';
+  }
+
+  closeShareBtn.addEventListener('click', closeShareModal);
+  cancelShareBtn.addEventListener('click', closeShareModal);
+  doneShareBtn.addEventListener('click', closeShareModal);
+  shareModal.addEventListener('click', e => { if(e.target === shareModal) closeShareModal(); });
+
+  copyShareBtn.addEventListener('click', async () => {
+    if(!shareLinkInput.value) return;
+    try {
+      await navigator.clipboard.writeText(shareLinkInput.value);
+    } catch(err) {
+      shareLinkInput.select();
+      try { document.execCommand('copy'); } catch(e) {}
+    }
+    shareCopied.textContent = 'Copied to clipboard.';
+  });
+
+  createShareBtn.addEventListener('click', async () => {
+    if(!shareDoc) return;
+    const expiryEl = document.querySelector('input[name="shareExpiry"]:checked');
+    const usageEl = document.querySelector('input[name="shareUsage"]:checked');
+    const expiry = expiryEl ? expiryEl.value : '1h';
+    const usage = usageEl ? usageEl.value : 'multi';
+
+    shareError.textContent = '';
+    shareError.style.display = 'none';
+    createShareBtn.disabled = true;
+    createShareBtn.textContent = 'Creating…';
+
+    try {
+      const res = await fetch(`/documents/${shareDoc.id}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiry: expiry, usage: usage })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.status === 'ok'){
+        shareLinkInput.value = data.url;
+        shareCopied.textContent = `Link expires in ${data.expires_in}.`;
+        shareForm.style.display = 'none';
+        shareResult.classList.add('open');
+        shareLinkInput.focus();
+        shareLinkInput.select();
+      } else {
+        showShareError(data.message || 'Could not create the link.');
+      }
+    } catch(err){
+      console.error(err);
+      showShareError('Network error. Please try again.');
+    }
+
+    createShareBtn.disabled = false;
+    createShareBtn.textContent = 'Create link';
+  });
 
   function escapeHtml(str) {
     if(!str) return '';
@@ -2501,6 +2741,7 @@
     if(e.key !== 'Escape') return;
     if(noteModal && noteModal.classList.contains('open')) closeNoteModal();
     else if(previewModal.classList.contains('open')) closePreview();
+    else if(shareModal.classList.contains('open')) closeShareModal();
     else if(deleteAccountModal.classList.contains('open')) closeDeleteAccountModal();
     else if(settingsModal.classList.contains('open')) closeSettingsModal();
   });

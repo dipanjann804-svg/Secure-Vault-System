@@ -4,10 +4,12 @@ import json
 import uuid
 import socket
 import time
+import hashlib
+import secrets
 import subprocess
 import threading
 import atexit
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,6 +51,12 @@ PREVIEW_MIME_TYPES = {
 
 # Phrase the user has to type before their account is erased.
 DELETE_ACCOUNT_PHRASE = 'DELETE MY ACCOUNT'
+
+# --- Public share links ---
+# expiry choice -> minutes
+SHARE_EXPIRY_MINUTES = {'10m': 10, '1h': 60, '24h': 24 * 60}
+# usage choice -> max downloads (None = unlimited)
+SHARE_USAGE = {'once': 1, 'multi': None}
 
 # --- Login lockout policy (ported from time.py) ---
 MAX_ATTEMPTS = 6
@@ -171,6 +179,63 @@ def _canonical_builtin_folder(name):
         if folder.lower() == (name or "").strip().lower():
             return folder
     return None
+
+
+def _hash_share_token(token):
+    """Hash a share token before it ever touches the database."""
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def _lookup_share_link(token):
+    """Find a share link by hashing the presented token. Returns None if unknown."""
+    token = (token or "").strip()
+    if not token or len(token) > 200:
+        return None
+    return ShareLink.query.filter_by(token=_hash_share_token(token)).first()
+
+
+def _share_link_unavailable(link):
+    """True when a link has expired or used up its allowed downloads."""
+    if link.expires_at and link.expires_at <= datetime.utcnow():
+        return True
+    if link.max_uses is not None and (link.use_count or 0) >= link.max_uses:
+        return True
+    return False
+
+
+def _share_time_left(expires_at):
+    """Human readable time remaining, e.g. '10 minutes' or '24 hours'."""
+    if not expires_at:
+        return "soon"
+    seconds = int((expires_at - datetime.utcnow()).total_seconds())
+    if seconds <= 0:
+        return "expired"
+    # Round up so a fresh "10 minutes" link doesn't immediately read "9 minutes".
+    minutes = max(1, (seconds + 59) // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''}"
+
+
+def _format_file_size(size):
+    """Small byte-size formatter used by the public share page."""
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return "0 B"
+    if size < 1024:
+        return f"{size} B"
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024.0
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return f"{size:.1f} GB"
 
 
 def _sync_schema():
@@ -794,6 +859,105 @@ def create_app():
             )
         return response
 
+    # --- Public share links ---
+    @app.route("/documents/<int:doc_id>/share", methods=["POST"])
+    @login_required
+    def create_share_link(doc_id):
+        doc = Document.query.filter_by(id=doc_id, user_id=current_user.id).first_or_404()
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        expiry = (data.get("expiry") or "").strip().lower()
+        usage = (data.get("usage") or "").strip().lower()
+
+        if expiry not in SHARE_EXPIRY_MINUTES:
+            return jsonify({"status": "error", "message": "Choose an expiry time."}), 400
+        if usage not in SHARE_USAGE:
+            return jsonify({"status": "error", "message": "Choose how often the link can be used."}), 400
+
+        # The plaintext token only exists in this response; the DB stores its hash.
+        token = secrets.token_urlsafe(32)
+        link = ShareLink(
+            user_id=current_user.id,
+            document_id=doc.id,
+            token=_hash_share_token(token),
+            max_uses=SHARE_USAGE[usage],
+            use_count=0,
+            expires_at=datetime.utcnow() + timedelta(minutes=SHARE_EXPIRY_MINUTES[expiry]),
+        )
+        db.session.add(link)
+        db.session.commit()
+
+        return jsonify({
+            "status": "ok",
+            "url": url_for("shared_file", token=token, _external=True),
+            "expires_in": _share_time_left(link.expires_at),
+            "usage": usage,
+        })
+
+    @app.route("/s/<token>")
+    def shared_file(token):
+        """Public landing page for a share link (does not consume a download)."""
+        link = _lookup_share_link(token)
+        if link is None:
+            abort(404)
+        if _share_link_unavailable(link):
+            return render_template("share_unavailable.html"), 410
+
+        doc = db.session.get(Document, link.document_id) if link.document_id else None
+        if doc is None or not doc.file_path or not os.path.isfile(doc.file_path):
+            abort(404)
+
+        return render_template(
+            "share.html",
+            token=token,
+            doc=doc,
+            size_label=_format_file_size(doc.file_size),
+            expires_in=_share_time_left(link.expires_at),
+            single_use=(link.max_uses == 1),
+        )
+
+    @app.route("/s/<token>/download")
+    def shared_file_download(token):
+        """Download a shared file once per allowed use, with an atomic counter."""
+        link = _lookup_share_link(token)
+        if link is None:
+            abort(404)
+        if link.expires_at and link.expires_at <= datetime.utcnow():
+            return render_template("share_unavailable.html"), 410
+
+        doc = db.session.get(Document, link.document_id) if link.document_id else None
+        if doc is None or not doc.file_path or not os.path.isfile(doc.file_path):
+            abort(404)
+
+        # Claim one use atomically so two simultaneous requests cannot both succeed.
+        query = ShareLink.query.filter(
+            ShareLink.id == link.id,
+            ShareLink.expires_at > datetime.utcnow(),
+        )
+        if link.max_uses is not None:
+            query = query.filter(func.coalesce(ShareLink.use_count, 0) < link.max_uses)
+        claimed = query.update(
+            {ShareLink.use_count: func.coalesce(ShareLink.use_count, 0) + 1},
+            synchronize_session=False,
+        )
+        db.session.commit()
+        if claimed != 1:
+            return render_template("share_unavailable.html"), 410
+
+        # Always download as an opaque attachment: shared files are never rendered
+        # inside the vault's origin, so an uploaded HTML/SVG file cannot run.
+        response = send_file(
+            doc.file_path,
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            download_name=doc.original_filename or "shared-file",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        return response
+
     @app.route("/documents/delete", methods=["POST"])
     @login_required
     def delete_documents():
@@ -816,6 +980,8 @@ def create_app():
             try:
                 doc = Document.query.filter_by(id=int(doc_id), user_id=current_user.id).first()
                 if doc:
+                    # A deleted file must not stay reachable through an old link.
+                    ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
                     if doc.file_path and os.path.exists(doc.file_path):
                         try:
                             os.remove(doc.file_path)
@@ -847,6 +1013,7 @@ def create_app():
         ).all()
         deleted_count = 0
         for doc in docs:
+            ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
             if doc.file_path and os.path.exists(doc.file_path):
                 try:
                     os.remove(doc.file_path)

@@ -52,11 +52,18 @@ class Note(db.Model):
 
 
 class ShareLink(db.Model):
-    """Reserved for shared-document links. Removed first when an account is deleted."""
+    """Expiring public link to one document.
+
+    ``token`` stores a SHA-256 hash of the secret token that appears in the URL.
+    The plaintext token is only ever returned once, at creation time, so a
+    database leak cannot reveal working links.
+    """
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=True)
-    token = db.Column(db.String(64), unique=True, nullable=False)
+    token = db.Column(db.String(64), unique=True, nullable=False)  # sha256 hex digest
+    max_uses = db.Column(db.Integer, nullable=True)  # None = unlimited downloads
+    use_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=True)
 
