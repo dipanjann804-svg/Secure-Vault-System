@@ -1120,6 +1120,89 @@
   .share-copied{font-size:12px; color:#15803D; min-height:16px; margin:8px 0 0;}
   html[data-theme="dark"] .share-copied{color:#4ADE80;}
 
+  /* Trash (30-day recycle bin) */
+  .trash-trigger{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    font-family:inherit;
+    font-size:13px;
+    font-weight:600;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:12px;
+    padding:9px 13px;
+    margin-right:10px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .trash-trigger:hover{border-color:var(--purple);}
+  .trash-trigger .trash-badge{
+    font-size:11px;
+    font-weight:700;
+    color:var(--purple);
+    background:var(--purple-tint);
+    border-radius:999px;
+    padding:1px 7px;
+  }
+  .trash-card{max-width:620px;}
+  .trash-note{
+    font-size:12.5px;
+    line-height:1.55;
+    color:var(--muted);
+    margin:-10px 0 16px;
+  }
+  .trash-list{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    max-height:52vh;
+    overflow-y:auto;
+    margin-bottom:16px;
+  }
+  .trash-empty{
+    font-size:13px;
+    color:var(--muted);
+    text-align:center;
+    padding:26px 10px;
+    border:1.5px dashed var(--border);
+    border-radius:14px;
+  }
+  .trash-item{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    border:1.5px solid var(--border);
+    border-radius:14px;
+    padding:11px 13px;
+  }
+  .trash-info{min-width:0;}
+  .trash-name{
+    font-size:13.5px;
+    font-weight:600;
+    color:var(--ink);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .trash-meta{font-size:11.5px; color:var(--muted); margin-top:3px;}
+  .trash-actions{display:flex; gap:6px; flex-shrink:0;}
+  .trash-btn{
+    font-family:inherit;
+    font-size:12px;
+    font-weight:600;
+    border:none;
+    border-radius:9px;
+    padding:7px 10px;
+    cursor:pointer;
+  }
+  .trash-btn.restore{color:var(--purple); background:var(--purple-tint);}
+  .trash-btn.purge{color:#B91C1C; background:#FEE2E2;}
+  html[data-theme="dark"] .trash-btn.purge{color:#FCA5A5; background:#3B2426;}
+  .trash-btn:disabled{opacity:.6; cursor:default;}
+
   @media (max-width:600px){
     .title-block h1{font-size:23px;}
     header{align-items:stretch;}
@@ -1165,6 +1248,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="text" id="searchInput" placeholder="Search your documents…">
     </div>
+    <button type="button" class="trash-trigger" id="openTrashBtn" title="Deleted files are kept here for 30 days">
+      🗑 Trash <span class="trash-badge" id="trashBadge">{{ trash|length }}</span>
+    </button>
     <div class="profile">
       <button class="profile-btn" id="profileBtn">A</button>
       <div class="profile-menu" id="profileMenu">
@@ -1463,6 +1549,24 @@
   </div>
 </div>
 
+<!-- Trash modal -->
+<div class="modal-overlay" id="trashModal">
+  <div class="modal-card trash-card">
+    <button class="modal-close" id="closeTrashBtn" aria-label="Close">✕</button>
+    <h2>Trash</h2>
+    <p class="trash-note">
+      Deleted files are kept for 30 days, stored compressed (lossless) so a restore
+      returns the exact original file. They can’t be downloaded or shared while here, and
+      are permanently erased when the 30 days end.
+    </p>
+    <div class="trash-list" id="trashList"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="emptyTrashBtn">Empty trash</button>
+      <button type="button" class="btn-primary" id="doneTrashBtn">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- Delete account modal -->
 <div class="modal-overlay" id="deleteAccountModal">
   <div class="modal-card">
@@ -1525,6 +1629,9 @@
   const FOLDER_VIEW = {{ 'true' if folder_view else 'false' }};
   let searchTerm = '';
 
+  // Trashed files (server-rendered, refreshed from /trash/list when opened)
+  let trashItems = {{ trash|tojson }};
+
   const folderRow = document.getElementById('folderRow');
   const docGrid = document.getElementById('docGrid');
   const targetFolder = document.getElementById('targetFolder');
@@ -1551,6 +1658,13 @@
   const doneShareBtn = document.getElementById('doneShareBtn');
   const copyShareBtn = document.getElementById('copyShareBtn');
   const createShareBtn = document.getElementById('createShareBtn');
+  const trashModal = document.getElementById('trashModal');
+  const trashList = document.getElementById('trashList');
+  const trashBadge = document.getElementById('trashBadge');
+  const openTrashBtn = document.getElementById('openTrashBtn');
+  const closeTrashBtn = document.getElementById('closeTrashBtn');
+  const doneTrashBtn = document.getElementById('doneTrashBtn');
+  const emptyTrashBtn = document.getElementById('emptyTrashBtn');
 
   // Rebuild FOLDERS from the built-in list plus folders found on the user's documents
   function buildFolderList(){
@@ -1852,6 +1966,128 @@
     createShareBtn.textContent = 'Create link';
   });
 
+  // --- Trash (30-day recycle bin) ---
+  function updateTrashBadge(count){
+    trashBadge.textContent = typeof count === 'number' ? count : trashItems.length;
+  }
+
+  function renderTrash(){
+    updateTrashBadge(trashItems.length);
+    trashList.innerHTML = '';
+    if(trashItems.length === 0){
+      trashList.innerHTML = '<div class="trash-empty">Trash is empty. Deleted files appear here for 30 days.</div>';
+      emptyTrashBtn.disabled = true;
+      return;
+    }
+    emptyTrashBtn.disabled = false;
+    trashItems.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'trash-item';
+      const saved = item.saved_percent > 0 ? ` · ${item.saved_percent}% smaller` : '';
+      const days = item.days_left === 1 ? '1 day' : `${item.days_left} days`;
+      row.innerHTML = `
+        <div class="trash-info">
+          <div class="trash-name">${escapeHtml(item.name)}</div>
+          <div class="trash-meta">${escapeHtml(item.folder || '')} · ${escapeHtml(item.size_label)} → ${escapeHtml(item.trash_label)} compressed${saved} · ${days} left</div>
+        </div>
+        <div class="trash-actions">
+          <button type="button" class="trash-btn restore" data-restore="${item.id}">Restore</button>
+          <button type="button" class="trash-btn purge" data-purge="${item.id}">Delete forever</button>
+        </div>`;
+      trashList.appendChild(row);
+    });
+    trashList.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', () => restoreTrash([parseInt(btn.dataset.restore, 10)]));
+    });
+    trashList.querySelectorAll('[data-purge]').forEach(btn => {
+      btn.addEventListener('click', () => purgeTrash([parseInt(btn.dataset.purge, 10)]));
+    });
+  }
+
+  async function openTrashModal(){
+    renderTrash();
+    trashModal.classList.add('open');
+    try {
+      const res = await fetch('/trash/list');
+      const data = await res.json();
+      if(data.status === 'ok'){
+        trashItems = data.items || [];
+        renderTrash();
+      }
+    } catch(err){
+      console.error(err);
+    }
+  }
+
+  function closeTrashModal(){ trashModal.classList.remove('open'); }
+
+  async function restoreTrash(ids){
+    if(!ids.length) return;
+    try {
+      const res = await fetch('/trash/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(data.status === 'ok' && data.restored_count > 0){
+        window.location.href = '/dashboard';
+        return;
+      }
+      alert(data.message || 'Could not restore the file.');
+    } catch(err){
+      console.error(err);
+      alert('Error restoring file: ' + err.message);
+    }
+  }
+
+  async function purgeTrash(ids){
+    if(!ids.length) return;
+    const label = ids.length === 1 ? 'this file' : `these ${ids.length} files`;
+    if(!confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch('/trash/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(data.status === 'ok'){
+        trashItems = trashItems.filter(item => !ids.includes(item.id));
+        renderTrash();
+      } else {
+        alert(data.message || 'Could not delete the file.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error deleting file: ' + err.message);
+    }
+  }
+
+  async function emptyTrash(){
+    if(trashItems.length === 0) return;
+    if(!confirm('Permanently delete every file in the Trash? This cannot be undone.')) return;
+    try {
+      const res = await fetch('/trash/empty', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if(data.status === 'ok'){
+        trashItems = [];
+        renderTrash();
+      } else {
+        alert(data.message || 'Could not empty the Trash.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Error emptying Trash: ' + err.message);
+    }
+  }
+
+  openTrashBtn.addEventListener('click', openTrashModal);
+  closeTrashBtn.addEventListener('click', closeTrashModal);
+  doneTrashBtn.addEventListener('click', closeTrashModal);
+  emptyTrashBtn.addEventListener('click', emptyTrash);
+  trashModal.addEventListener('click', e => { if(e.target === trashModal) closeTrashModal(); });
+
   function escapeHtml(str) {
     if(!str) return '';
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -1891,7 +2127,7 @@
   async function removeFolder(name){
     const count = documents.filter(d => (d.folder || '').toLowerCase() === name.toLowerCase()).length;
     const message = count > 0
-      ? `Remove the "${name}" folder?\n\n${count} file(s) inside will be permanently deleted.`
+      ? `Remove the "${name}" folder?\n\n${count} file(s) inside will be moved to Trash and can be restored for 30 days.`
       : `Remove the "${name}" folder?`;
     if(!confirm(message)) return;
 
@@ -1906,6 +2142,7 @@
       const data = await res.json();
       if(data.status === 'ok'){
         documents = documents.filter(d => (d.folder || '').toLowerCase() !== name.toLowerCase());
+        updateTrashBadge((parseInt(trashBadge.textContent || '0', 10) || 0) + (data.moved_to_trash || 0));
         BUILTIN_FOLDERS = BUILTIN_FOLDERS.filter(f => f.toLowerCase() !== name.toLowerCase());
         if(builtin && !hiddenFolders.some(h => h.toLowerCase() === builtin.toLowerCase())){
           hiddenFolders.push(builtin);
@@ -1999,9 +2236,11 @@
     }
   }
 
-  // Delete single document from database
+  // Move a single document to the Trash (recoverable for 30 days)
   async function deleteDocument(docId){
-    if(!confirm('Are you sure you want to delete this document?')) return;
+    const doc = documents.find(d => d.id === docId);
+    const label = doc ? `"${doc.name}"` : 'this document';
+    if(!confirm(`Move ${label} to Trash?\n\nIt stays recoverable for 30 days, and any share links stop working right away.`)) return;
     try {
       const res = await fetch('/documents/delete', {
         method: 'POST',
@@ -2012,9 +2251,10 @@
       if(data.status === 'ok'){
         documents = documents.filter(d => d.id !== docId);
         selectedDocIds.delete(docId);
+        updateTrashBadge((parseInt(trashBadge.textContent || '0', 10) || 0) + (data.moved_to_trash || 0));
         renderAll();
       } else {
-        alert('Could not delete document.');
+        alert('Could not move document to Trash.');
       }
     } catch(err){
       console.error(err);
@@ -2022,10 +2262,10 @@
     }
   }
 
-  // Batch delete selected documents from database
+  // Batch move selected documents to the Trash
   async function deleteSelectedDocuments(){
     if(selectedDocIds.size === 0) return;
-    if(!confirm(`Delete ${selectedDocIds.size} selected document(s)?`)) return;
+    if(!confirm(`Move ${selectedDocIds.size} selected document(s) to Trash?\n\nThey stay recoverable for 30 days.`)) return;
 
     try {
       const res = await fetch('/documents/delete', {
@@ -2036,10 +2276,11 @@
       const data = await res.json();
       if(data.status === 'ok'){
         documents = documents.filter(d => !selectedDocIds.has(d.id));
+        updateTrashBadge((parseInt(trashBadge.textContent || '0', 10) || 0) + (data.moved_to_trash || 0));
         exitDocSelectMode();
         renderAll();
       } else {
-        alert('Could not delete selected documents.');
+        alert('Could not move selected documents to Trash.');
       }
     } catch(err){
       console.error(err);
@@ -2742,6 +2983,7 @@
     if(noteModal && noteModal.classList.contains('open')) closeNoteModal();
     else if(previewModal.classList.contains('open')) closePreview();
     else if(shareModal.classList.contains('open')) closeShareModal();
+    else if(trashModal.classList.contains('open')) closeTrashModal();
     else if(deleteAccountModal.classList.contains('open')) closeDeleteAccountModal();
     else if(settingsModal.classList.contains('open')) closeSettingsModal();
   });

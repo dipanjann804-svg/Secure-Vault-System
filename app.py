@@ -2,6 +2,7 @@ import os
 import re
 import json
 import uuid
+import gzip
 import socket
 import time
 import hashlib
@@ -15,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from flask import (
     Flask, render_template, url_for, request, redirect, flash, 
-    send_from_directory, send_file, jsonify, abort
+    send_from_directory, send_file, jsonify, abort, current_app
 )
 from flask_login import (
     LoginManager, login_user, login_required, current_user, logout_user
@@ -238,6 +239,222 @@ def _format_file_size(size):
     return f"{size:.1f} GB"
 
 
+# --- Trash (30-day recycle bin) ---
+TRASH_RETENTION_DAYS = 30
+TRASH_CHUNK_SIZE = 1024 * 1024
+_last_trash_cleanup = 0.0
+
+
+def _trash_days_left(deleted_at):
+    """Whole days left before a trashed file is purged (at least 0)."""
+    if not deleted_at:
+        return TRASH_RETENTION_DAYS
+    deadline = deleted_at + timedelta(days=TRASH_RETENTION_DAYS)
+    seconds = (deadline - datetime.utcnow()).total_seconds()
+    if seconds <= 0:
+        return 0
+    return max(0, int((seconds + 86399) // 86400))
+
+
+def _trash_items_for_user(user_id):
+    """Serialise a user's trashed documents for the dashboard and Trash API."""
+    docs = Document.query.filter(
+        Document.user_id == user_id,
+        Document.deleted_at.isnot(None),
+    ).order_by(Document.deleted_at.desc()).all()
+
+    items = []
+    for doc in docs:
+        original = doc.trash_original_size if doc.trash_original_size is not None else (doc.file_size or 0)
+        compressed = doc.trash_size or 0
+        if original > 0 and compressed > 0:
+            saved_percent = max(0, round((1 - compressed / original) * 100))
+        else:
+            saved_percent = 0
+        items.append({
+            "id": doc.id,
+            "name": doc.original_filename,
+            "folder": doc.folder,
+            "size": original,
+            "size_label": _format_file_size(original),
+            "trash_label": _format_file_size(compressed) if compressed else "—",
+            "saved_percent": saved_percent,
+            "deleted_at": doc.deleted_at.strftime("%b %d, %Y") if doc.deleted_at else "",
+            "days_left": _trash_days_left(doc.deleted_at),
+        })
+    return items
+
+
+def _compress_into_trash(doc):
+    """Losslessly gzip a live document into the trash folder.
+
+    Returns True when the file was successfully copied and removed from the
+    live upload folder. The compressed stream is written beside its final name
+    first and then moved into place, so a crash cannot leave a half-written
+    recovery file under the real name.
+    """
+    if not doc.file_path or not os.path.isfile(doc.file_path):
+        # Missing bytes: still move the record to trash so the user can see it
+        # and the cleanup job can eventually drop it.
+        doc.deleted_at = datetime.utcnow()
+        doc.trash_path = None
+        doc.trash_size = None
+        doc.trash_original_size = doc.file_size
+        doc.trash_checksum = None
+        return True
+
+    trash_name = f"{uuid.uuid4().hex}.gz"
+    trash_path = os.path.join(current_app.config['TRASH_FOLDER'], trash_name)
+    part_path = trash_path + ".part"
+    digest = hashlib.sha256()
+    original_size = 0
+
+    try:
+        with open(doc.file_path, "rb") as source, \
+                gzip.open(part_path, "wb", compresslevel=9) as target:
+            while True:
+                chunk = source.read(TRASH_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                original_size += len(chunk)
+                target.write(chunk)
+        os.replace(part_path, trash_path)
+    except (OSError, EOFError) as exc:
+        print(f"[!] Could not compress {doc.original_filename} into trash: {exc}", flush=True)
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+        return False
+
+    try:
+        os.remove(doc.file_path)
+    except OSError:
+        # The compressed copy is safe; a leftover original is harmless.
+        pass
+
+    doc.deleted_at = datetime.utcnow()
+    doc.trash_path = trash_path
+    doc.trash_size = os.path.getsize(trash_path)
+    doc.trash_original_size = original_size
+    doc.trash_checksum = digest.hexdigest()
+    doc.file_path = None
+    return True
+
+
+def _move_documents_to_trash(docs):
+    """Move documents to the trash and revoke their share links.
+
+    Share links are deleted in the same transaction, so a link stops working
+    the moment the file leaves the live folders. Returns how many moved.
+    """
+    moved = 0
+    for doc in docs:
+        if doc.deleted_at:
+            continue
+        if _compress_into_trash(doc):
+            # Revoke links only once the bytes are safely in the trash.
+            ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
+            moved += 1
+    return moved
+
+
+def _restore_document_from_trash(doc):
+    """Decompress a trashed document back to uploads, byte for byte.
+
+    The gzip stream is verified against the original size and SHA-256 digest
+    before the live file is accepted. A failed verification leaves the trash
+    copy untouched so the user can retry.
+    """
+    if not doc.deleted_at or not doc.trash_path or not os.path.isfile(doc.trash_path):
+        return False
+
+    base_name = secure_filename(doc.original_filename or doc.filename or "document") or "document"
+    live_name = f"{uuid.uuid4().hex}_{base_name}"
+    live_path = os.path.join(current_app.config['UPLOAD_FOLDER'], live_name)
+    digest = hashlib.sha256()
+    restored_size = 0
+
+    try:
+        with gzip.open(doc.trash_path, "rb") as source, open(live_path, "wb") as target:
+            while True:
+                chunk = source.read(TRASH_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                restored_size += len(chunk)
+                target.write(chunk)
+    except (OSError, EOFError) as exc:
+        print(f"[!] Could not restore {doc.original_filename} from trash: {exc}", flush=True)
+        try:
+            os.remove(live_path)
+        except OSError:
+            pass
+        return False
+
+    expected_size = doc.trash_original_size
+    expected_checksum = doc.trash_checksum
+    if (expected_checksum and digest.hexdigest() != expected_checksum) or \
+            (expected_size is not None and restored_size != expected_size):
+        print(f"[!] Trash restore verification failed for {doc.original_filename}", flush=True)
+        try:
+            os.remove(live_path)
+        except OSError:
+            pass
+        return False
+
+    try:
+        os.remove(doc.trash_path)
+    except OSError:
+        pass
+
+    doc.filename = live_name
+    doc.file_path = live_path
+    doc.file_size = restored_size
+    doc.deleted_at = None
+    doc.trash_path = None
+    doc.trash_size = None
+    doc.trash_original_size = None
+    doc.trash_checksum = None
+    return True
+
+
+def _purge_trashed_document(doc):
+    """Permanently remove a trashed document and its compressed bytes."""
+    if doc.trash_path:
+        try:
+            os.remove(doc.trash_path)
+        except OSError:
+            pass
+    db.session.delete(doc)
+
+
+def _cleanup_expired_trash(force=False):
+    """Permanently purge trash older than the retention window.
+
+    Runs at most once an hour from before_request, and on demand with
+    force=True (used at startup and by tests).
+    """
+    global _last_trash_cleanup
+    now = time.time()
+    if not force and now - _last_trash_cleanup < 3600:
+        return 0
+    _last_trash_cleanup = now
+
+    cutoff = datetime.utcnow() - timedelta(days=TRASH_RETENTION_DAYS)
+    expired = Document.query.filter(
+        Document.deleted_at.isnot(None),
+        Document.deleted_at <= cutoff,
+    ).all()
+    for doc in expired:
+        _purge_trashed_document(doc)
+    if expired:
+        db.session.commit()
+        print(f"[+] Purged {len(expired)} expired trash item(s)", flush=True)
+    return len(expired)
+
+
 def _sync_schema():
     """Add columns that were introduced in models.py after the database was created.
 
@@ -314,6 +531,11 @@ def create_app():
     upload_folder = os.path.join(app.root_path, 'uploads')
     os.makedirs(upload_folder, exist_ok=True)
     app.config['UPLOAD_FOLDER'] = upload_folder
+    # Trashed files are kept compressed here for 30 days before cleanup.
+    # TRASH_FOLDER can point outside the app directory (tests, ephemeral hosts).
+    trash_folder = os.environ.get('TRASH_FOLDER') or os.path.join(app.root_path, 'trash')
+    os.makedirs(trash_folder, exist_ok=True)
+    app.config['TRASH_FOLDER'] = trash_folder
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max upload
 
     db.init_app(app)
@@ -324,8 +546,18 @@ def create_app():
         try:
             db.create_all()
             _sync_schema()
+            # Drop anything whose 30 days ran out while the app was offline.
+            _cleanup_expired_trash(force=True)
         except Exception as e:
             print(f"[!] Warning during db.create_all: {e}")
+
+    @app.before_request
+    def _sweep_expired_trash():
+        """Purge expired trash at most once an hour, on any request."""
+        try:
+            _cleanup_expired_trash()
+        except Exception as e:
+            print(f"[!] Trash cleanup skipped: {e}", flush=True)
 
     @login_manager.user_loader
     def load_user(user_id):
@@ -698,8 +930,14 @@ def create_app():
     # --- Dashboard ---
     def _dashboard_context(active_folder=None):
         """Build the data the dashboard / folder page templates need."""
-        # Fetch user's documents
-        documents = Document.query.filter_by(user_id=current_user.id).order_by(Document.created_at.desc()).all()
+        # Fetch user's live documents (trashed files live in the Trash bin).
+        documents = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.deleted_at.is_(None),
+        ).order_by(Document.created_at.desc()).all()
+
+        # Fetch the user's trashed documents with their compressed sizes.
+        trash = _trash_items_for_user(current_user.id)
 
         # Fetch user's notes and decrypt contents
         raw_notes = Note.query.filter_by(user_id=current_user.id).order_by(Note.created_at.desc()).all()
@@ -734,6 +972,7 @@ def create_app():
             "user": current_user,
             "documents": documents,
             "notes": notes,
+            "trash": trash,
             "folders": folders,
             "default_folders": [f for f in ALLOWED_FOLDERS if f not in hidden_folders],
             "hidden_folders": [f for f in ALLOWED_FOLDERS if f in hidden_folders],
@@ -810,7 +1049,10 @@ def create_app():
     @app.route("/documents/<int:doc_id>/download")
     @login_required
     def download_document(doc_id):
-        doc = Document.query.filter_by(id=doc_id, user_id=current_user.id).first_or_404()
+        # Trashed files can never be downloaded; restore them first.
+        doc = Document.query.filter_by(
+            id=doc_id, user_id=current_user.id, deleted_at=None
+        ).first_or_404()
         return send_from_directory(
             app.config['UPLOAD_FOLDER'],
             doc.filename,
@@ -822,7 +1064,9 @@ def create_app():
     @login_required
     def preview_document(doc_id):
         """Owner-only in-browser preview for safe file types (no download)."""
-        doc = Document.query.filter_by(id=doc_id, user_id=current_user.id).first_or_404()
+        doc = Document.query.filter_by(
+            id=doc_id, user_id=current_user.id, deleted_at=None
+        ).first_or_404()
 
         ext = os.path.splitext(doc.original_filename or doc.filename or "")[1].lower()
         if ext not in PREVIEW_EXTENSIONS:
@@ -863,7 +1107,10 @@ def create_app():
     @app.route("/documents/<int:doc_id>/share", methods=["POST"])
     @login_required
     def create_share_link(doc_id):
-        doc = Document.query.filter_by(id=doc_id, user_id=current_user.id).first_or_404()
+        # Only live files can be shared; trashed files must be restored first.
+        doc = Document.query.filter_by(
+            id=doc_id, user_id=current_user.id, deleted_at=None
+        ).first_or_404()
         data = (request.get_json(silent=True) or {}) if request.is_json else request.form
         expiry = (data.get("expiry") or "").strip().lower()
         usage = (data.get("usage") or "").strip().lower()
@@ -903,7 +1150,12 @@ def create_app():
             return render_template("share_unavailable.html"), 410
 
         doc = db.session.get(Document, link.document_id) if link.document_id else None
-        if doc is None or not doc.file_path or not os.path.isfile(doc.file_path):
+        if doc is None:
+            abort(404)
+        if doc.deleted_at is not None:
+            # Owner moved it to trash: sharing stops at once.
+            return render_template("share_unavailable.html"), 410
+        if not doc.file_path or not os.path.isfile(doc.file_path):
             abort(404)
 
         return render_template(
@@ -925,9 +1177,13 @@ def create_app():
             return render_template("share_unavailable.html"), 410
 
         doc = db.session.get(Document, link.document_id) if link.document_id else None
-        if doc is None or not doc.file_path or not os.path.isfile(doc.file_path):
+        if doc is None:
             abort(404)
-
+        if doc.deleted_at is not None:
+            # The owner moved the file to trash: the link is dead immediately.
+            return render_template("share_unavailable.html"), 410
+        if not doc.file_path or not os.path.isfile(doc.file_path):
+            abort(404)
         # Claim one use atomically so two simultaneous requests cannot both succeed.
         query = ShareLink.query.filter(
             ShareLink.id == link.id,
@@ -975,30 +1231,120 @@ def create_app():
             flash("No documents selected for deletion", "error")
             return redirect(url_for("dashboard"))
 
-        deleted_count = 0
+        moved_count = 0
         for doc_id in doc_ids:
             try:
-                doc = Document.query.filter_by(id=int(doc_id), user_id=current_user.id).first()
-                if doc:
-                    # A deleted file must not stay reachable through an old link.
-                    ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
-                    if doc.file_path and os.path.exists(doc.file_path):
-                        try:
-                            os.remove(doc.file_path)
-                        except OSError:
-                            pass
-                    db.session.delete(doc)
-                    deleted_count += 1
+                doc = Document.query.filter_by(
+                    id=int(doc_id), user_id=current_user.id, deleted_at=None
+                ).first()
+                if doc and _move_documents_to_trash([doc]):
+                    moved_count += 1
             except (ValueError, TypeError):
                 continue
 
         db.session.commit()
 
         if request.is_json:
-            return jsonify({"status": "ok", "deleted_count": deleted_count})
+            return jsonify({
+                "status": "ok",
+                "deleted_count": moved_count,
+                "moved_to_trash": moved_count,
+                "retention_days": TRASH_RETENTION_DAYS,
+            })
 
-        flash(f"Deleted {deleted_count} document(s)", "success")
+        flash(
+            f"Moved {moved_count} document(s) to Trash — permanently deleted after "
+            f"{TRASH_RETENTION_DAYS} days",
+            "success",
+        )
         return redirect(url_for("dashboard"))
+
+    # --- Trash Routes ---
+    @app.route("/trash/list")
+    @login_required
+    def list_trash():
+        """Return the signed-in user's trash as JSON (used by the Trash modal)."""
+        return jsonify({
+            "status": "ok",
+            "retention_days": TRASH_RETENTION_DAYS,
+            "items": _trash_items_for_user(current_user.id),
+        })
+
+    @app.route("/trash/restore", methods=["POST"])
+    @login_required
+    def restore_trash():
+        """Restore trashed documents, decompressing them back byte for byte."""
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        doc_ids = data.get("ids") or ([data.get("id")] if data.get("id") else [])
+
+        if not doc_ids:
+            return jsonify({"status": "error", "message": "No document IDs provided"}), 400
+
+        restored_count = 0
+        failed = []
+        for doc_id in doc_ids:
+            try:
+                doc = Document.query.filter_by(
+                    id=int(doc_id), user_id=current_user.id
+                ).filter(Document.deleted_at.isnot(None)).first()
+            except (ValueError, TypeError):
+                continue
+            if doc is None:
+                continue
+            if _restore_document_from_trash(doc):
+                restored_count += 1
+            else:
+                failed.append(doc.original_filename)
+
+        db.session.commit()
+
+        message = f"Restored {restored_count} file(s)."
+        if failed:
+            message += " Could not restore: " + ", ".join(failed)
+        return jsonify({
+            "status": "ok" if restored_count else "error",
+            "restored_count": restored_count,
+            "failed": failed,
+            "message": message,
+        })
+
+    @app.route("/trash/purge", methods=["POST"])
+    @login_required
+    def purge_trash():
+        """Permanently delete trashed documents now (cannot be undone)."""
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        doc_ids = data.get("ids") or ([data.get("id")] if data.get("id") else [])
+
+        if not doc_ids:
+            return jsonify({"status": "error", "message": "No document IDs provided"}), 400
+
+        purged_count = 0
+        for doc_id in doc_ids:
+            try:
+                doc = Document.query.filter_by(
+                    id=int(doc_id), user_id=current_user.id
+                ).filter(Document.deleted_at.isnot(None)).first()
+            except (ValueError, TypeError):
+                continue
+            if doc is not None:
+                _purge_trashed_document(doc)
+                purged_count += 1
+
+        db.session.commit()
+        return jsonify({"status": "ok", "purged_count": purged_count})
+
+    @app.route("/trash/empty", methods=["POST"])
+    @login_required
+    def empty_trash():
+        """Permanently delete every trashed document for this user."""
+        docs = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.deleted_at.isnot(None),
+        ).all()
+        for doc in docs:
+            _purge_trashed_document(doc)
+        db.session.commit()
+        return jsonify({"status": "ok", "purged_count": len(docs)})
 
     # --- Folder Routes ---
     @app.route("/folders/remove", methods=["POST"])
@@ -1007,20 +1353,13 @@ def create_app():
         data = (request.get_json(silent=True) or {}) if request.is_json else request.form
         folder = _clean_folder_name(data.get("name"))
 
-        # Delete every file the user has in this folder
-        docs = Document.query.filter_by(user_id=current_user.id).filter(
-            func.lower(Document.folder) == folder.lower()
+        # Move every live file in this folder to the Trash (restorable for 30 days)
+        docs = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.deleted_at.is_(None),
+            func.lower(Document.folder) == folder.lower(),
         ).all()
-        deleted_count = 0
-        for doc in docs:
-            ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
-            if doc.file_path and os.path.exists(doc.file_path):
-                try:
-                    os.remove(doc.file_path)
-                except OSError:
-                    pass
-            db.session.delete(doc)
-            deleted_count += 1
+        deleted_count = _move_documents_to_trash(docs)
 
         # Built-in folders are recreated on every dashboard load, so remember
         # that the user removed this one. Custom folders disappear on their own.
@@ -1038,9 +1377,13 @@ def create_app():
                 "status": "ok",
                 "folder": canonical or folder,
                 "deleted_count": deleted_count,
+                "moved_to_trash": deleted_count,
             })
 
-        flash(f"Removed folder '{canonical or folder}' ({deleted_count} file(s) deleted)", "success")
+        flash(
+            f"Removed folder '{canonical or folder}' — {deleted_count} file(s) moved to Trash",
+            "success",
+        )
         return redirect(url_for("dashboard"))
 
     @app.route("/folders/restore", methods=["POST"])
@@ -1211,13 +1554,14 @@ def create_app():
         # 1) Share links
         ShareLink.query.filter_by(user_id=user_id).delete(synchronize_session=False)
 
-        # 2) Documents and the files they point at
+        # 2) Documents and the files they point at (live uploads and trash copies)
         for doc in Document.query.filter_by(user_id=user_id).all():
-            if doc.file_path and os.path.exists(doc.file_path):
-                try:
-                    os.remove(doc.file_path)
-                except OSError:
-                    pass
+            for path in (doc.file_path, doc.trash_path):
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
             db.session.delete(doc)
         db.session.flush()
 

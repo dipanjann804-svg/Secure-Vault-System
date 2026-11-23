@@ -41,6 +41,16 @@ class Document(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
+    # --- Trash (30-day recycle bin) ---
+    # deleted_at is NULL for live files. A trashed file has no live file_path;
+    # its bytes live in trash_path as a lossless gzip stream and the original
+    # size/checksum are kept so a restore can be verified byte for byte.
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    trash_path = db.Column(db.String(500), nullable=True)
+    trash_size = db.Column(db.Integer, nullable=True)          # compressed size on disk
+    trash_original_size = db.Column(db.Integer, nullable=True)  # uncompressed size
+    trash_checksum = db.Column(db.String(64), nullable=True)    # sha256 of the original bytes
+
 
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
