@@ -779,15 +779,17 @@ def _get_local_ip():
 
 
 def get_base_url():
+    if os.environ.get('RENDER_EXTERNAL_URL'):
+        return os.environ.get('RENDER_EXTERNAL_URL').strip().rstrip('/')
+
     configured_url = os.environ.get('APP_URL') or os.environ.get('BASE_URL')
-    # If a real public domain is configured (e.g. Render https://xxx.onrender.com), use it directly
-    if configured_url and '127.0.0.1' not in configured_url and 'localhost' not in configured_url:
+    if configured_url and not (os.environ.get('RENDER') and ('192.168.' in configured_url or '10.' in configured_url or 'localhost' in configured_url or '127.0.0.1' in configured_url)):
         return configured_url.strip().rstrip('/')
 
     scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
     host = request.headers.get('X-Forwarded-Host', request.host)
     # If request is from localhost / 127.0.0.1, resolve to local Wi-Fi IP so phones on same Wi-Fi can open it
-    if '127.0.0.1' in host or 'localhost' in host:
+    if ('127.0.0.1' in host or 'localhost' in host) and not os.environ.get('RENDER'):
         local_ip = _get_local_ip()
         port = host.split(':')[-1] if ':' in host else '5555'
         return f"{scheme}://{local_ip}:{port}"
@@ -816,8 +818,24 @@ def forgot_password():
                     result = send_password_reset_email(user['email'], reset_link)
                     if not result:
                         print(f"[!] Email dispatch notice: {result.message}", flush=True)
+                        return render_template(
+                            'forgot_password.html',
+                            errors=errors,
+                            reset_url=reset_link,
+                            delivery_failed=True,
+                            delivery_error=result.message,
+                            submitted_email=user['email'],
+                        )
                 except Exception as mail_err:
                     print(f"[!] Email dispatch error: {mail_err}", flush=True)
+                    return render_template(
+                        'forgot_password.html',
+                        errors=errors,
+                        reset_url=reset_link,
+                        delivery_failed=True,
+                        delivery_error=str(mail_err),
+                        submitted_email=user['email'],
+                    )
 
             flash('If an account exists with that email address, a password reset link has been sent.')
             return redirect(url_for('login'))

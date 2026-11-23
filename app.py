@@ -809,13 +809,16 @@ def create_app():
         return ip or '127.0.0.1'
 
     def get_base_url():
+        if os.environ.get('RENDER_EXTERNAL_URL'):
+            return os.environ.get('RENDER_EXTERNAL_URL').strip().rstrip('/')
+
         configured_url = os.environ.get('APP_URL') or os.environ.get('BASE_URL')
-        if configured_url:
+        if configured_url and not (os.environ.get('RENDER') and ('192.168.' in configured_url or '10.' in configured_url or 'localhost' in configured_url or '127.0.0.1' in configured_url)):
             return configured_url.strip().rstrip('/')
 
         scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
         host = request.headers.get('X-Forwarded-Host', request.host)
-        if '127.0.0.1' in host or 'localhost' in host:
+        if ('127.0.0.1' in host or 'localhost' in host) and not os.environ.get('RENDER'):
             local_ip = get_local_ip()
             port = host.split(':')[-1] if ':' in host else '5555'
             return f"{scheme}://{local_ip}:{port}"
@@ -851,11 +854,14 @@ def create_app():
                         return redirect(url_for("login"))
                     else:
                         print(f"[!] Email dispatch failed for {user.email}: {result.message}")
-                        flash(
-                            f"Email delivery error: {result.message}",
-                            "error"
+                        return render_template(
+                            "forgot_password.html",
+                            errors=errors,
+                            reset_url=reset_link,
+                            delivery_failed=True,
+                            delivery_error=result.message,
+                            submitted_email=user.email,
                         )
-                        return redirect(url_for("forgot_password"))
                 else:
                     print(f"[!] Password reset requested but email NOT found in database: {email}. Note: If using SQLite on Render Free tier, restarting/sleeping the instance wipes local databases.")
                     flash(

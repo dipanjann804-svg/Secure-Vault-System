@@ -33,7 +33,7 @@ class EmailResult:
 def _send_via_resend(api_key: str, to_email: str, subject: str, html_content: str, text_content: str, sender: str) -> tuple[bool, str]:
     """Sends email via Resend HTTP API (Port 443 - works on Render Free Tier)."""
     url = "https://api.resend.com/emails"
-    from_email = sender if ("@" in sender and not sender.endswith(".local") and "gmail.com" not in sender) else "Secure Vault <onboarding@resend.dev>"
+    from_email = sender if ("@" in sender and not sender.endswith(".local") and "gmail.com" not in sender) else "onboarding@resend.dev"
     payload = {
         "from": from_email,
         "to": [to_email],
@@ -54,6 +54,8 @@ def _send_via_resend(api_key: str, to_email: str, subject: str, html_content: st
             return False, f"Resend API returned HTTP {response.status}"
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
+        if "not allowed by policy" in err_body or e.code == 403:
+            return False, f"Resend API 403: Key lacks sending permissions or unverified sending domain ({err_body})"
         return False, f"Resend API error ({e.code}): {err_body}"
     except Exception as e:
         return False, f"Resend request failed: {e}"
@@ -73,6 +75,7 @@ def _send_via_brevo(api_key: str, to_email: str, subject: str, html_content: str
     headers = {
         "api-key": api_key.strip(),
         "Content-Type": "application/json",
+        "accept": "application/json",
         "User-Agent": "SecureVault/1.0"
     }
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
@@ -86,6 +89,37 @@ def _send_via_brevo(api_key: str, to_email: str, subject: str, html_content: str
         return False, f"Brevo API error ({e.code}): {err_body}"
     except Exception as e:
         return False, f"Brevo request failed: {e}"
+
+
+def _send_via_sendgrid(api_key: str, to_email: str, subject: str, html_content: str, text_content: str, sender: str) -> tuple[bool, str]:
+    """Sends email via SendGrid HTTP API (Port 443 - works on Render Free Tier)."""
+    url = "https://api.sendgrid.com/v3/mail/send"
+    sender_email = sender if ("@" in sender and not sender.endswith(".local")) else "no-reply@securevault.com"
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"name": "Secure Vault System", "email": sender_email},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": text_content},
+            {"type": "text/html", "value": html_content}
+        ]
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+        "User-Agent": "SecureVault/1.0"
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status in (200, 201, 202):
+                return True, "Email sent successfully via SendGrid API"
+            return False, f"SendGrid API returned HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        return False, f"SendGrid API error ({e.code}): {err_body}"
+    except Exception as e:
+        return False, f"SendGrid request failed: {e}"
 
 
 def send_password_reset_email(to_email: str, reset_url: str) -> EmailResult:
@@ -175,7 +209,17 @@ Secure Vault Security Team
             return EmailResult(True, msg)
         print(f"[!] Brevo API failed: {msg}. Falling back to SMTP if configured...")
 
-    # 3. SMTP configuration (Gmail or custom SMTP)
+    # 3. Try SendGrid HTTP API if configured
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "").strip()
+    if sendgrid_key:
+        sender = os.environ.get("MAIL_DEFAULT_SENDER", "").strip()
+        success, msg = _send_via_sendgrid(sendgrid_key, to_email, subject, html_content, text_content, sender)
+        if success:
+            print(f"[+] Password reset email sent via SendGrid API to {to_email}")
+            return EmailResult(True, msg)
+        print(f"[!] SendGrid API failed: {msg}. Falling back to SMTP if configured...")
+
+    # 4. SMTP configuration (Gmail or custom SMTP)
     mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com").strip()
     mail_port = int(os.environ.get("MAIL_PORT", 587))
     mail_username = (os.environ.get("MAIL_USERNAME") or "").strip()
@@ -189,8 +233,8 @@ Secure Vault Security Team
     if not mail_username or not mail_password:
         err_msg = (
             "MAIL_USERNAME or MAIL_PASSWORD not configured. "
-            "Please set MAIL_USERNAME and MAIL_PASSWORD (16-character Google App Password) in your Render Environment Variables. "
-            "Alternatively, add RESEND_API_KEY to send emails via HTTP without SMTP port restrictions."
+            "Render Free Tier blocks outbound SMTP ports (25, 465, 587). "
+            "To send emails via HTTP without port restrictions, set RESEND_API_KEY or BREVO_API_KEY in Render Environment Variables."
         )
         print("\n" + "=" * 70)
         print("  [!] EMAIL CONFIGURATION ERROR")
@@ -221,12 +265,12 @@ Secure Vault Security Team
         try:
             print(f"[*] Attempting SMTP delivery to {mail_server}:{port}...")
             if port == 465:
-                with smtplib.SMTP_SSL(mail_server, port, timeout=8, context=ssl_context) as server:
+                with smtplib.SMTP_SSL(mail_server, port, timeout=4, context=ssl_context) as server:
                     server.ehlo()
                     server.login(mail_username, mail_password)
                     server.sendmail(mail_sender, [to_email], msg.as_string())
             else:
-                with smtplib.SMTP(mail_server, port, timeout=8) as server:
+                with smtplib.SMTP(mail_server, port, timeout=4) as server:
                     server.ehlo()
                     server.starttls(context=ssl_context)
                     server.ehlo()
@@ -253,6 +297,10 @@ Secure Vault Security Team
         except (socket.timeout, TimeoutError, smtplib.SMTPConnectError, OSError) as e:
             last_error = e
             print(f"[!] SMTP connection on port {port} failed: {e}")
+            err_str = str(e)
+            if "101" in err_str or "unreachable" in err_str.lower() or getattr(e, 'errno', None) == 101:
+                print("[!] Host firewall blocked outbound SMTP (network unreachable). Fast-failing remaining ports.")
+                break
 
         except Exception as e:
             last_error = e
@@ -262,7 +310,7 @@ Secure Vault Security Team
     diagnostic_msg = (
         f"SMTP connection to {mail_server} timed out or failed ({last_error}). "
         "Render Free Tier blocks outbound SMTP ports (25, 465, 587). "
-        "To resolve this, set RESEND_API_KEY in Render Environment Variables (free at https://resend.com, works over HTTP 443), "
+        "To resolve this, set RESEND_API_KEY or BREVO_API_KEY in Render Environment Variables (free at https://resend.com, works over HTTP 443), "
         "or upgrade Render to a paid plan."
     )
 
