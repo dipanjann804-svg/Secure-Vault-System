@@ -12,23 +12,28 @@ from flask_login import LoginManager, login_user, login_required, current_user, 
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
+from dotenv import load_dotenv
 import sqlite3
 import json
 import uuid
 import re
 import socket
+import subprocess
+import time
 from datetime import datetime
+
+load_dotenv()
 
 # Bump this whenever the runner changes so you can confirm which code is live
 # by opening http://127.0.0.1:5555/health/db
-BUILD_TAG = "minimal-2 (preview + robust download)"
+BUILD_TAG = "minimal-3 (auto port management + robust preview & download)"
 
 # Create Flask app (no SQLAlchemy import needed for basic operation)
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
-# Use a simple SECRET_KEY - the app will work with limited functionality
-app.config['SECRET_KEY'] = 'dev-secret-key-vault-123'
+# Secret key loaded from environment
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-vault-123')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -322,6 +327,7 @@ def _dashboard_context(active_folder=None):
         "folder_counts": folder_counts,
         "active_folder": active_folder,
         "folder_view": active_folder is not None,
+        "trash": [],  # minimal mode: no trash feature (no TRASH_FOLDER / trash columns)
     }
 
 
@@ -763,6 +769,32 @@ def _serializer():
     return URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 
+def _get_local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('8.8.8.8', 80))
+            return s.getsockname()[0]
+    except Exception:
+        return '127.0.0.1'
+
+
+def get_base_url():
+    configured_url = os.environ.get('APP_URL') or os.environ.get('BASE_URL')
+    # If a real public domain is configured (e.g. Render https://xxx.onrender.com), use it directly
+    if configured_url and '127.0.0.1' not in configured_url and 'localhost' not in configured_url:
+        return configured_url.strip().rstrip('/')
+
+    scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
+    host = request.headers.get('X-Forwarded-Host', request.host)
+    # If request is from localhost / 127.0.0.1, resolve to local Wi-Fi IP so phones on same Wi-Fi can open it
+    if '127.0.0.1' in host or 'localhost' in host:
+        local_ip = _get_local_ip()
+        port = host.split(':')[-1] if ':' in host else '5555'
+        return f"{scheme}://{local_ip}:{port}"
+
+    return f"{scheme}://{host}"
+
+
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
     errors = []
@@ -776,8 +808,17 @@ def forgot_password():
             conn.close()
             if user:
                 token = _serializer().dumps(user['email'], salt="password-reset-salt")
-                reset_link = url_for('reset_password', token=token, _external=True)
+                base_url = get_base_url()
+                reset_link = f"{base_url}/reset-password/{token}"
                 print(f"\n[+] PASSWORD RESET LINK for {user['email']}: {reset_link}\n", flush=True)
+                try:
+                    from email_service import send_password_reset_email
+                    result = send_password_reset_email(user['email'], reset_link)
+                    if not result:
+                        print(f"[!] Email dispatch notice: {result.message}", flush=True)
+                except Exception as mail_err:
+                    print(f"[!] Email dispatch error: {mail_err}", flush=True)
+
             flash('If an account exists with that email address, a password reset link has been sent.')
             return redirect(url_for('login'))
     return render_template('forgot_password.html', errors=errors)
@@ -845,24 +886,96 @@ def _port_in_use(port):
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _free_port(port):
+    """
+    Terminates any stale process occupying the target port.
+    Returns True if port is now free, False otherwise.
+    """
+    if not _port_in_use(port):
+        return True
+
+    current_pid = os.getpid()
+    pids_to_kill = set()
+
+    # Strategy 1: netstat -ano -p tcp
+    try:
+        out = subprocess.check_output('netstat -ano -p tcp', shell=True, text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 5 and parts[0].upper() == 'TCP' and parts[3].upper() == 'LISTENING':
+                if parts[1].endswith(f':{port}'):
+                    try:
+                        p = int(parts[4])
+                        if p > 0 and p != current_pid:
+                            pids_to_kill.add(p)
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+
+    # Strategy 2: PowerShell Get-NetTCPConnection (if netstat missed it)
+    if not pids_to_kill:
+        try:
+            ps_cmd = f"powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess\""
+            out = subprocess.check_output(ps_cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+            for line in out.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    p = int(line)
+                    if p > 0 and p != current_pid:
+                        pids_to_kill.add(p)
+        except Exception:
+            pass
+
+    for pid in pids_to_kill:
+        print(f"  [*] Port {port} is occupied by stale process (PID {pid}). Terminating it...", flush=True)
+        try:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)],
+                           capture_output=True, check=False)
+        except Exception:
+            pass
+
+    # Wait briefly for OS to release the socket
+    for _ in range(6):
+        time.sleep(0.3)
+        if not _port_in_use(port):
+            return True
+
+    return not _port_in_use(port)
+
+
+def _ensure_available_port(desired_port):
+    """
+    Ensures an available port by first attempting to kill any stale process on desired_port,
+    and if that fails, automatically finding the next available port.
+    """
+    if not _port_in_use(desired_port):
+        return desired_port
+
+    print(f"  [!] Port {desired_port} is already in use. Attempting to free it...", flush=True)
+    if _free_port(desired_port):
+        print(f"  [+] Successfully freed port {desired_port}.", flush=True)
+        return desired_port
+
+    # If still in use, fallback to next available port
+    curr_port = desired_port + 1
+    while _port_in_use(curr_port):
+        curr_port += 1
+
+    print(f"  [i] Port {desired_port} could not be freed. Switched to next available port: {curr_port}", flush=True)
+    return curr_port
+
+
 # Run the app
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
 
     # Windows lets several processes bind the same port, so a forgotten old
-    # server silently keeps serving stale code. Refuse to start a duplicate.
-    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true' and _port_in_use(port):
-        print("\n" + "=" * 70, flush=True)
-        print(f"  [!] PORT {port} IS ALREADY IN USE", flush=True)
-        print("=" * 70, flush=True)
-        print("  Another Secure Vault server is already running on this port,", flush=True)
-        print("  so this new one would serve stale code. Do one of these:", flush=True)
-        print("", flush=True)
-        print("    1. Stop the other server (Ctrl+C in its terminal), then run again.", flush=True)
-        print("    2. Or use a different port:", flush=True)
-        print(f"         $env:PORT=5556; python run_minimal.py", flush=True)
-        print("=" * 70 + "\n", flush=True)
-        sys.exit(1)
+    # server silently keeps serving stale code. Automatically free the port
+    # or select the next free port instead of failing.
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+        port = _ensure_available_port(port)
+        os.environ['PORT'] = str(port)
 
     print("\n" + "=" * 70, flush=True)
     print("  [+] SECURE VAULT SYSTEM IS RUNNING (Minimal mode)", flush=True)

@@ -17,12 +17,12 @@ Fixed in run_minimal.py:
     reaches |tojson ("Object of type Undefined is not JSON serializable").
 
 If preview or download still looks broken:
-  1. Make sure only ONE server is running. This runner now refuses to start
-     a second copy on the same port and prints "PORT 5555 IS ALREADY IN USE".
+  1. The runner now automatically manages ports: it terminates stale background
+     processes on port 5555 or switches to the next free port, avoiding port lockouts.
   2. Check which build your browser is using: http://127.0.0.1:5555/health/db
-     It must show "minimal-2 (preview + robust download)".
+     It must show "minimal-3 (auto port management + robust preview & download)".
   3. Hard-refresh the dashboard (Ctrl+F5) to drop cached JavaScript.
-  4. To stop every stray server at once (PowerShell):
+  4. To stop every stray server at once, run stop.bat or run (PowerShell):
        Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
          Where-Object { $_.CommandLine -like '*run_minimal*' } |
          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
