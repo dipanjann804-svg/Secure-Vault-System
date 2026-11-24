@@ -20,13 +20,16 @@ import re
 import socket
 import subprocess
 import time
-from datetime import datetime
+import gzip
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 
 load_dotenv()
 
 # Bump this whenever the runner changes so you can confirm which code is live
 # by opening http://127.0.0.1:5555/health/db
-BUILD_TAG = "minimal-3 (auto port management + robust preview & download)"
+BUILD_TAG = "minimal-4 (share links + 30-day trash + account deletion)"
 
 # Create Flask app (no SQLAlchemy import needed for basic operation)
 app = Flask(__name__)
@@ -43,6 +46,11 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _UPLOAD_DIR = os.path.join(_BASE_DIR, 'uploads')
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = _UPLOAD_DIR
+
+# Compressed trash storage (30-day recycle bin). Override with TRASH_FOLDER.
+_TRASH_DIR = os.environ.get('TRASH_FOLDER') or os.path.join(_BASE_DIR, 'trash')
+os.makedirs(_TRASH_DIR, exist_ok=True)
+app.config['TRASH_FOLDER'] = _TRASH_DIR
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # Use SQLite directly without SQLAlchemy
@@ -109,12 +117,33 @@ def init_db():
         ("file_type", "ALTER TABLE document ADD COLUMN file_type TEXT"),
         ("file_path", "ALTER TABLE document ADD COLUMN file_path TEXT"),
         ("folder", "ALTER TABLE document ADD COLUMN folder TEXT"),
+        ("deleted_at", "ALTER TABLE document ADD COLUMN deleted_at TIMESTAMP"),
+        ("trash_path", "ALTER TABLE document ADD COLUMN trash_path TEXT"),
+        ("trash_size", "ALTER TABLE document ADD COLUMN trash_size INTEGER"),
+        ("trash_original_size", "ALTER TABLE document ADD COLUMN trash_original_size INTEGER"),
+        ("trash_checksum", "ALTER TABLE document ADD COLUMN trash_checksum TEXT"),
     ):
         if col not in existing_cols:
             try:
                 cur.execute(ddl)
             except Exception:
                 pass
+
+    # Public share links. Only a SHA-256 hash of the token is ever stored.
+    cur.execute('''CREATE TABLE IF NOT EXISTS share_link (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        document_id INTEGER,
+        token TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP,
+        max_uses INTEGER,
+        use_count INTEGER DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES user (id)
+    )''')
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_share_link_token ON share_link (token)"
+    )
     conn.commit()
     conn.close()
 
@@ -223,6 +252,20 @@ PREVIEW_MIME_TYPES = {
     '.webp': 'image/webp',
 }
 
+# --- Public share links ---
+# expiry choice -> minutes
+SHARE_EXPIRY_MINUTES = {'10m': 10, '1h': 60, '24h': 24 * 60}
+# usage choice -> max downloads (None = unlimited)
+SHARE_USAGE = {'once': 1, 'multi': None}
+
+# --- Trash (30-day recycle bin) ---
+TRASH_RETENTION_DAYS = 30
+TRASH_CHUNK_SIZE = 1024 * 1024
+_last_trash_cleanup = 0.0
+
+# Phrase required before an account is erased.
+DELETE_ACCOUNT_PHRASE = 'DELETE MY ACCOUNT'
+
 
 def _resolve_doc_file(doc):
     """Return (directory, filename) for a document row, or None if the file is gone.
@@ -255,6 +298,311 @@ def _parse_dt(value):
     return None
 
 
+def _format_file_size(size):
+    """Small byte-size formatter used by the Trash modal and share page."""
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return "0 B"
+    if size < 1024:
+        return f"{size} B"
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024.0
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return f"{size:.1f} GB"
+
+
+# --- Share link helpers ---
+def _hash_share_token(token):
+    """Hash a share token before it ever touches the database."""
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def _lookup_share_link(token):
+    """Find a share link by hashing the presented token. Returns None if unknown."""
+    token = (token or "").strip()
+    if not token or len(token) > 200:
+        return None
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM share_link WHERE token = ?", (_hash_share_token(token),)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def _share_link_unavailable(link):
+    """True when a link has expired or used up its allowed downloads."""
+    expires_at = _parse_dt(link['expires_at'])
+    if expires_at and expires_at <= datetime.utcnow():
+        return True
+    max_uses = link['max_uses']
+    if max_uses is not None and (link['use_count'] or 0) >= max_uses:
+        return True
+    return False
+
+
+def _share_time_left(expires_at):
+    """Human readable time remaining, e.g. '10 minutes' or '24 hours'."""
+    expires_at = _parse_dt(expires_at)
+    if not expires_at:
+        return "soon"
+    seconds = int((expires_at - datetime.utcnow()).total_seconds())
+    if seconds <= 0:
+        return "expired"
+    minutes = max(1, (seconds + 59) // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''}"
+
+
+# --- Trash helpers ---
+def _trash_days_left(deleted_at):
+    """Whole days left before a trashed file is purged (at least 0)."""
+    deleted_at = _parse_dt(deleted_at)
+    if not deleted_at:
+        return TRASH_RETENTION_DAYS
+    deadline = deleted_at + timedelta(days=TRASH_RETENTION_DAYS)
+    seconds = (deadline - datetime.utcnow()).total_seconds()
+    if seconds <= 0:
+        return 0
+    return max(0, int((seconds + 86399) // 86400))
+
+
+def _trash_items_for_user(user_id):
+    """Serialise a user's trashed documents for the dashboard and Trash API."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM document WHERE user_id = ? AND deleted_at IS NOT NULL "
+        "ORDER BY deleted_at DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+
+    items = []
+    for doc in rows:
+        original = doc['trash_original_size'] if doc['trash_original_size'] is not None else (doc['file_size'] or 0)
+        compressed = doc['trash_size'] or 0
+        if original > 0 and compressed > 0:
+            saved_percent = max(0, round((1 - compressed / original) * 100))
+        else:
+            saved_percent = 0
+        deleted_at = _parse_dt(doc['deleted_at'])
+        items.append({
+            "id": doc['id'],
+            "name": doc['original_filename'],
+            "folder": doc['folder'],
+            "size": original,
+            "size_label": _format_file_size(original),
+            "trash_label": _format_file_size(compressed) if compressed else "—",
+            "saved_percent": saved_percent,
+            "deleted_at": deleted_at.strftime("%b %d, %Y") if deleted_at else "",
+            "days_left": _trash_days_left(doc['deleted_at']),
+        })
+    return items
+
+
+def _compress_into_trash(conn, doc):
+    """Losslessly gzip a live document into the trash folder.
+
+    Returns True when the file was successfully copied and removed from the
+    live upload folder. The compressed stream is written beside its final name
+    first and then moved into place, so a crash cannot leave a half-written
+    recovery file under the real name. Share links are revoked in the same
+    transaction, so they stop working immediately.
+    """
+    resolved = _resolve_doc_file(doc)
+    if not resolved:
+        # Missing bytes: still move the record to trash so the user can see it
+        # and the cleanup job can eventually drop it.
+        conn.execute(
+            "UPDATE document SET deleted_at = ?, trash_path = NULL, trash_size = NULL, "
+            "trash_original_size = ?, trash_checksum = NULL, file_path = NULL "
+            "WHERE id = ?",
+            (datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"), doc['file_size'], doc['id']),
+        )
+        conn.execute("DELETE FROM share_link WHERE document_id = ?", (doc['id'],))
+        return True
+
+    directory, filename = resolved
+    source_path = os_mod.path.join(directory, filename)
+    trash_name = f"{uuid.uuid4().hex}.gz"
+    trash_path = os_mod.path.join(app.config['TRASH_FOLDER'], trash_name)
+    part_path = trash_path + ".part"
+    digest = hashlib.sha256()
+    original_size = 0
+
+    try:
+        with open(source_path, "rb") as source, \
+                gzip.open(part_path, "wb", compresslevel=9) as target:
+            while True:
+                chunk = source.read(TRASH_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                original_size += len(chunk)
+                target.write(chunk)
+        os_mod.replace(part_path, trash_path)
+    except (OSError, EOFError) as exc:
+        print(f"[!] Could not compress {doc['original_filename']} into trash: {exc}", flush=True)
+        try:
+            os_mod.remove(part_path)
+        except OSError:
+            pass
+        return False
+
+    stored_path = doc['file_path'] if 'file_path' in doc.keys() else None
+    unremoved = None
+    for path in {source_path, stored_path}:
+        if not path or not os_mod.path.isfile(path):
+            continue
+        for _attempt in range(3):
+            try:
+                os_mod.remove(path)
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            # Another process may still be reading it (e.g. an in-flight
+            # download). Keep the path so purge/restore can retry the delete.
+            unremoved = path
+
+    conn.execute(
+        "UPDATE document SET deleted_at = ?, trash_path = ?, trash_size = ?, "
+        "trash_original_size = ?, trash_checksum = ?, file_path = ? WHERE id = ?",
+        (datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
+         trash_path, os_mod.path.getsize(trash_path),
+         original_size, digest.hexdigest(), unremoved, doc['id']),
+    )
+    conn.execute("DELETE FROM share_link WHERE document_id = ?", (doc['id'],))
+    return True
+
+
+def _restore_document_from_trash(conn, doc):
+    """Decompress a trashed document back to uploads, byte for byte.
+
+    The gzip stream is verified against the original size and SHA-256 digest
+    before the live file is accepted. A failed verification leaves the trash
+    copy untouched so the user can retry.
+    """
+    trash_path = doc['trash_path']
+    if not trash_path or not os_mod.path.isfile(trash_path):
+        return False
+
+    base_name = secure_filename(doc['original_filename'] or doc['filename'] or "document") or "document"
+    live_name = f"{uuid.uuid4().hex}_{base_name}"
+    live_path = os_mod.path.join(app.config['UPLOAD_FOLDER'], live_name)
+    digest = hashlib.sha256()
+    restored_size = 0
+
+    try:
+        with gzip.open(trash_path, "rb") as source, open(live_path, "wb") as target:
+            while True:
+                chunk = source.read(TRASH_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                restored_size += len(chunk)
+                target.write(chunk)
+    except (OSError, EOFError) as exc:
+        print(f"[!] Could not restore {doc['original_filename']} from trash: {exc}", flush=True)
+        try:
+            os_mod.remove(live_path)
+        except OSError:
+            pass
+        return False
+
+    expected_size = doc['trash_original_size']
+    expected_checksum = doc['trash_checksum']
+    if (expected_checksum and digest.hexdigest() != expected_checksum) or \
+            (expected_size is not None and restored_size != expected_size):
+        print(f"[!] Trash restore verification failed for {doc['original_filename']}", flush=True)
+        try:
+            os_mod.remove(live_path)
+        except OSError:
+            pass
+        return False
+
+    try:
+        os_mod.remove(trash_path)
+    except OSError:
+        pass
+
+    # If the original could not be removed when it was trashed, drop it now.
+    stale_path = doc['file_path']
+    if stale_path and stale_path != live_path and os_mod.path.isfile(stale_path):
+        try:
+            os_mod.remove(stale_path)
+        except OSError:
+            pass
+
+    conn.execute(
+        "UPDATE document SET filename = ?, file_path = ?, file_size = ?, "
+        "deleted_at = NULL, trash_path = NULL, trash_size = NULL, "
+        "trash_original_size = NULL, trash_checksum = NULL WHERE id = ?",
+        (live_name, live_path, restored_size, doc['id']),
+    )
+    return True
+
+
+def _purge_trashed_document(conn, doc):
+    """Permanently remove a trashed document and its compressed bytes."""
+    for path in (doc['trash_path'], doc['file_path']):
+        if path and os_mod.path.isfile(path):
+            try:
+                os_mod.remove(path)
+            except OSError:
+                pass
+    conn.execute("DELETE FROM share_link WHERE document_id = ?", (doc['id'],))
+    conn.execute("DELETE FROM document WHERE id = ?", (doc['id'],))
+
+
+def _cleanup_expired_trash(force=False):
+    """Permanently purge trash older than the retention window."""
+    global _last_trash_cleanup
+    now = time.time()
+    if not force and now - _last_trash_cleanup < 3600:
+        return 0
+    _last_trash_cleanup = now
+
+    cutoff = (datetime.utcnow() - timedelta(days=TRASH_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM document WHERE deleted_at IS NOT NULL AND deleted_at <= ?",
+        (cutoff,),
+    ).fetchall()
+    for doc in rows:
+        _purge_trashed_document(conn, doc)
+    conn.commit()
+    conn.close()
+    if rows:
+        print(f"[+] Purged {len(rows)} expired trash item(s)", flush=True)
+    return len(rows)
+
+
+@app.before_request
+def _maybe_cleanup_trash():
+    """Run the 30-day purge at most once an hour, without delaying requests."""
+    try:
+        _cleanup_expired_trash()
+    except Exception:
+        pass
+
+
+# Purge anything that expired while the app was stopped.
+try:
+    _cleanup_expired_trash(force=True)
+except Exception as _exc:
+    print(f"[!] Trash cleanup skipped: {_exc}", flush=True)
+
+
 class _Doc:
     """Attribute-access wrapper so dashboard.html can use doc.id, doc.created_at, etc."""
     def __init__(self, row):
@@ -275,7 +623,8 @@ def _dashboard_context(active_folder=None):
     """
     conn = get_db()
     doc_rows = conn.execute(
-        "SELECT * FROM document WHERE user_id = ? ORDER BY id DESC", (current_user.id,)
+        "SELECT * FROM document WHERE user_id = ? AND deleted_at IS NULL ORDER BY id DESC",
+        (current_user.id,),
     ).fetchall()
     note_rows = conn.execute(
         "SELECT * FROM note WHERE user_id = ? ORDER BY id DESC", (current_user.id,)
@@ -327,7 +676,7 @@ def _dashboard_context(active_folder=None):
         "folder_counts": folder_counts,
         "active_folder": active_folder,
         "folder_view": active_folder is not None,
-        "trash": [],  # minimal mode: no trash feature (no TRASH_FOLDER / trash columns)
+        "trash": _trash_items_for_user(current_user.id),
     }
 
 
@@ -475,7 +824,7 @@ def logout():
 def download_document(doc_id):
     conn = get_db()
     doc = conn.execute(
-        "SELECT * FROM document WHERE id = ? AND user_id = ?",
+        "SELECT * FROM document WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
         (doc_id, current_user.id),
     ).fetchone()
     conn.close()
@@ -502,7 +851,7 @@ def preview_document(doc_id):
     """Owner-only in-browser preview for safe file types (no download)."""
     conn = get_db()
     doc = conn.execute(
-        "SELECT * FROM document WHERE id = ? AND user_id = ?",
+        "SELECT * FROM document WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
         (doc_id, current_user.id),
     ).fetchone()
     conn.close()
@@ -549,6 +898,138 @@ def preview_document(doc_id):
     return response
 
 
+# --- Public share links ---
+@app.route('/documents/<int:doc_id>/share', methods=['POST'])
+@login_required
+def create_share_link(doc_id):
+    """Create a one-time or expiring public link for a live document."""
+    conn = get_db()
+    doc = conn.execute(
+        "SELECT * FROM document WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        (doc_id, current_user.id),
+    ).fetchone()
+    conn.close()
+    if not doc:
+        abort(404)
+
+    data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    expiry = (data.get('expiry') or '').strip().lower()
+    usage = (data.get('usage') or '').strip().lower()
+
+    if expiry not in SHARE_EXPIRY_MINUTES:
+        return jsonify({"status": "error", "message": "Choose an expiry time."}), 400
+    if usage not in SHARE_USAGE:
+        return jsonify({"status": "error", "message": "Choose how often the link can be used."}), 400
+
+    # The plaintext token only exists in this response; the DB stores its hash.
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(minutes=SHARE_EXPIRY_MINUTES[expiry])
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO share_link (user_id, document_id, token, expires_at, max_uses, use_count) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        (current_user.id, doc['id'], _hash_share_token(token),
+         expires_at.strftime("%Y-%m-%d %H:%M:%S.%f"), SHARE_USAGE[usage]),
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "status": "ok",
+        "url": url_for('shared_file', token=token, _external=True),
+        "expires_in": _share_time_left(expires_at),
+        "usage": usage,
+    })
+
+
+@app.route('/s/<token>')
+def shared_file(token):
+    """Public landing page for a share link (does not consume a download)."""
+    link = _lookup_share_link(token)
+    if link is None:
+        abort(404)
+    if _share_link_unavailable(link):
+        return render_template('share_unavailable.html'), 410
+
+    conn = get_db()
+    doc = conn.execute(
+        "SELECT * FROM document WHERE id = ?", (link['document_id'],)
+    ).fetchone()
+    conn.close()
+    if doc is None:
+        abort(404)
+    if doc['deleted_at'] is not None:
+        # Owner moved it to trash: sharing stops at once.
+        return render_template('share_unavailable.html'), 410
+    if not _resolve_doc_file(doc):
+        abort(404)
+
+    return render_template(
+        'share.html',
+        token=token,
+        doc=_Doc(doc),
+        size_label=_format_file_size(doc['file_size']),
+        expires_in=_share_time_left(link['expires_at']),
+        single_use=(link['max_uses'] == 1),
+    )
+
+
+@app.route('/s/<token>/download')
+def shared_file_download(token):
+    """Download a shared file once per allowed use, with an atomic counter."""
+    link = _lookup_share_link(token)
+    if link is None:
+        abort(404)
+    expires_at = _parse_dt(link['expires_at'])
+    if expires_at and expires_at <= datetime.utcnow():
+        return render_template('share_unavailable.html'), 410
+
+    conn = get_db()
+    doc = conn.execute(
+        "SELECT * FROM document WHERE id = ?", (link['document_id'],)
+    ).fetchone()
+    if doc is None:
+        conn.close()
+        abort(404)
+    if doc['deleted_at'] is not None:
+        conn.close()
+        return render_template('share_unavailable.html'), 410
+
+    # Claim one use atomically so two simultaneous requests cannot both succeed.
+    cur = conn.execute(
+        "UPDATE share_link SET use_count = COALESCE(use_count, 0) + 1 "
+        "WHERE id = ? AND expires_at > ? "
+        "AND (max_uses IS NULL OR COALESCE(use_count, 0) < max_uses)",
+        (link['id'], datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")),
+    )
+    conn.commit()
+    claimed = cur.rowcount
+    conn.close()
+    if claimed != 1:
+        return render_template('share_unavailable.html'), 410
+
+    resolved = _resolve_doc_file(doc)
+    if not resolved:
+        abort(404)
+    directory, filename = resolved
+
+    # Always download as an opaque attachment: shared files are never rendered
+    # inside the vault's origin, so an uploaded HTML/SVG file cannot run.
+    response = send_from_directory(
+        directory,
+        filename,
+        as_attachment=True,
+        download_name=doc['original_filename'] or 'shared-file',
+        mimetype='application/octet-stream',
+    )
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Content-Security-Policy'] = "default-src 'none'"
+    return response
+
+
 @app.route('/documents/delete', methods=['POST'])
 @login_required
 def delete_documents():
@@ -565,31 +1046,132 @@ def delete_documents():
         flash('No documents selected for deletion')
         return redirect(url_for('dashboard'))
 
-    deleted = 0
+    moved = 0
     conn = get_db()
     for doc_id in doc_ids:
         try:
             doc = conn.execute(
-                "SELECT * FROM document WHERE id = ? AND user_id = ?",
+                "SELECT * FROM document WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
                 (int(doc_id), current_user.id),
             ).fetchone()
         except (ValueError, TypeError):
             continue
-        if doc:
-            if doc['file_path'] and os_mod.path.exists(doc['file_path']):
-                try:
-                    os_mod.remove(doc['file_path'])
-                except OSError:
-                    pass
-            conn.execute("DELETE FROM document WHERE id = ?", (doc['id'],))
-            deleted += 1
+        if doc and _compress_into_trash(conn, doc):
+            moved += 1
     conn.commit()
     conn.close()
 
     if request.is_json:
-        return jsonify({"status": "ok", "deleted_count": deleted})
-    flash(f'Deleted {deleted} document(s)')
+        return jsonify({
+            "status": "ok",
+            "deleted_count": moved,
+            "moved_to_trash": moved,
+            "retention_days": TRASH_RETENTION_DAYS,
+        })
+    flash(
+        f"Moved {moved} document(s) to Trash — permanently deleted after "
+        f"{TRASH_RETENTION_DAYS} days",
+        "success",
+    )
     return redirect(url_for('dashboard'))
+
+
+# --- Trash routes ---
+@app.route('/trash/list')
+@login_required
+def list_trash():
+    """Return the signed-in user's trash as JSON (used by the Trash modal)."""
+    return jsonify({
+        "status": "ok",
+        "retention_days": TRASH_RETENTION_DAYS,
+        "items": _trash_items_for_user(current_user.id),
+    })
+
+
+@app.route('/trash/restore', methods=['POST'])
+@login_required
+def restore_trash():
+    """Restore trashed documents, decompressing them back byte for byte."""
+    data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    doc_ids = data.get('ids') or ([data.get('id')] if data.get('id') else [])
+    if not doc_ids:
+        return jsonify({"status": "error", "message": "No document IDs provided"}), 400
+
+    restored = 0
+    failed = []
+    conn = get_db()
+    for doc_id in doc_ids:
+        try:
+            doc = conn.execute(
+                "SELECT * FROM document WHERE id = ? AND user_id = ? "
+                "AND deleted_at IS NOT NULL",
+                (int(doc_id), current_user.id),
+            ).fetchone()
+        except (ValueError, TypeError):
+            continue
+        if doc is None:
+            continue
+        if _restore_document_from_trash(conn, doc):
+            restored += 1
+        else:
+            failed.append(doc['original_filename'])
+    conn.commit()
+    conn.close()
+
+    message = f"Restored {restored} file(s)."
+    if failed:
+        message += " Could not restore: " + ", ".join(failed)
+    return jsonify({
+        "status": "ok" if restored else "error",
+        "restored_count": restored,
+        "failed": failed,
+        "message": message,
+    })
+
+
+@app.route('/trash/purge', methods=['POST'])
+@login_required
+def purge_trash():
+    """Permanently delete trashed documents now (cannot be undone)."""
+    data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    doc_ids = data.get('ids') or ([data.get('id')] if data.get('id') else [])
+    if not doc_ids:
+        return jsonify({"status": "error", "message": "No document IDs provided"}), 400
+
+    purged = 0
+    conn = get_db()
+    for doc_id in doc_ids:
+        try:
+            doc = conn.execute(
+                "SELECT * FROM document WHERE id = ? AND user_id = ? "
+                "AND deleted_at IS NOT NULL",
+                (int(doc_id), current_user.id),
+            ).fetchone()
+        except (ValueError, TypeError):
+            continue
+        if doc is not None:
+            _purge_trashed_document(conn, doc)
+            purged += 1
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok", "purged_count": purged})
+
+
+@app.route('/trash/empty', methods=['POST'])
+@login_required
+def empty_trash():
+    """Permanently delete every trashed document for this user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM document WHERE user_id = ? AND deleted_at IS NOT NULL",
+        (current_user.id,),
+    ).fetchall()
+    for doc in rows:
+        _purge_trashed_document(conn, doc)
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok", "purged_count": len(rows)})
+
 
 
 @app.route('/notes/delete', methods=['POST'])
@@ -641,18 +1223,14 @@ def remove_folder():
 
     conn = get_db()
     docs = conn.execute(
-        "SELECT * FROM document WHERE user_id = ? AND lower(folder) = lower(?)",
+        "SELECT * FROM document WHERE user_id = ? AND deleted_at IS NULL "
+        "AND lower(folder) = lower(?)",
         (current_user.id, folder),
     ).fetchall()
     deleted = 0
     for doc in docs:
-        if doc['file_path'] and os_mod.path.exists(doc['file_path']):
-            try:
-                os_mod.remove(doc['file_path'])
-            except OSError:
-                pass
-        conn.execute("DELETE FROM document WHERE id = ?", (doc['id'],))
-        deleted += 1
+        if _compress_into_trash(conn, doc):
+            deleted += 1
 
     # Remember hidden built-in folders
     canonical = next((f for f in ALLOWED_FOLDERS if f.lower() == folder.lower()), None)
@@ -674,8 +1252,8 @@ def remove_folder():
 
     if request.is_json:
         return jsonify({"status": "ok", "folder": canonical or folder,
-                        "deleted_count": deleted})
-    flash(f"Removed folder '{canonical or folder}' ({deleted} file(s) deleted)")
+                        "deleted_count": deleted, "moved_to_trash": deleted})
+    flash(f"Removed folder '{canonical or folder}' — {deleted} file(s) moved to Trash")
     return redirect(url_for('dashboard'))
 
 
@@ -875,6 +1453,76 @@ def reset_password(token):
             return redirect(url_for('login'))
     conn.close()
     return render_template('reset_password.html', errors=errors)
+
+
+@app.route('/account/delete', methods=['POST'])
+@login_required
+def delete_account():
+    """Permanently erase the signed-in user's account and everything it owns."""
+    data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    password = data.get('password') or ''
+    phrase = (data.get('phrase') or '').strip()
+
+    def fail(message):
+        if request.is_json:
+            return jsonify({"status": "error", "message": message}), 400
+        flash(message)
+        return redirect(url_for('dashboard'))
+
+    if not check_password_hash(current_user.password_hash, password):
+        return fail("Current password is incorrect.")
+    if phrase.upper() != DELETE_ACCOUNT_PHRASE:
+        return fail(f'Type "{DELETE_ACCOUNT_PHRASE}" to confirm deletion.')
+
+    user_id = current_user.id
+    upload_folder = app.config['UPLOAD_FOLDER']
+    photo = current_user.profile_photo or ''
+
+    conn = get_db()
+    # Fixed deletion order: share links -> documents/files -> notes -> avatar -> account.
+    conn.execute("DELETE FROM share_link WHERE user_id = ?", (user_id,))
+    docs = conn.execute(
+        "SELECT * FROM document WHERE user_id = ?", (user_id,)
+    ).fetchall()
+    for doc in docs:
+        for path in (doc['file_path'], doc['trash_path']):
+            if path and os_mod.path.isfile(path):
+                try:
+                    os_mod.remove(path)
+                except OSError:
+                    pass
+    conn.execute("DELETE FROM document WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM note WHERE user_id = ?", (user_id,))
+
+    # Avatar
+    if photo.startswith('/uploads/'):
+        avatar_path = os_mod.path.join(upload_folder, os_mod.path.basename(photo))
+        if os_mod.path.isfile(avatar_path):
+            try:
+                os_mod.remove(avatar_path)
+            except OSError:
+                pass
+    conn.execute("UPDATE user SET profile_photo = NULL WHERE id = ?", (user_id,))
+
+    # Security logs are kept for auditing, but the identity is masked.
+    try:
+        conn.execute(
+            "UPDATE security_log SET user_id = NULL, login_id = 'deleted-account' "
+            "WHERE user_id = ?",
+            (user_id,),
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    conn.execute("DELETE FROM user WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    logout_user()
+    if request.is_json:
+        return jsonify({"status": "ok"})
+    flash("Your account has been permanently deleted.")
+    return redirect(url_for('login'))
 
 
 @app.route('/uploads/<filename>')

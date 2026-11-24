@@ -20,7 +20,7 @@ If preview or download still looks broken:
   1. The runner now automatically manages ports: it terminates stale background
      processes on port 5555 or switches to the next free port, avoiding port lockouts.
   2. Check which build your browser is using: http://127.0.0.1:5555/health/db
-     It must show "minimal-3 (auto port management + robust preview & download)".
+     It must show "minimal-4 (share links + 30-day trash + account deletion)".
   3. Hard-refresh the dashboard (Ctrl+F5) to drop cached JavaScript.
   4. To stop every stray server at once, run stop.bat or run (PowerShell):
        Get-CimInstance Win32_Process -Filter "Name='python.exe'" |

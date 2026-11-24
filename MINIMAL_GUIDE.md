@@ -79,12 +79,20 @@ occur — no matter which page loads.
 | `/documents/upload` | POST | ✅ |
 | `/documents/<id>/download` | GET | ✅ |
 | `/documents/<id>/view` | GET | ✅ (in-browser preview: PDF, PNG, JPG, GIF, WEBP) |
-| `/documents/delete` | POST | ✅ |
+| `/documents/<id>/share` | POST | ✅ (10 min / 1 h / 24 h, one-time or multi-use) |
+| `/s/<token>` | GET | — (public share landing page) |
+| `/s/<token>/download` | GET | — (public download) |
+| `/documents/delete` | POST | ✅ (moves to 30-day Trash) |
+| `/trash/list` | GET | ✅ |
+| `/trash/restore` | POST | ✅ |
+| `/trash/purge` | POST | ✅ |
+| `/trash/empty` | POST | ✅ |
 | `/notes/add` | POST | ✅ |
 | `/notes/delete` | POST | ✅ |
-| `/folders/remove` | POST | ✅ |
+| `/folders/remove` | POST | ✅ (files move to Trash) |
 | `/folders/restore` | POST | ✅ |
 | `/profile/update` | POST | ✅ |
+| `/account/delete` | POST | ✅ (password + `DELETE MY ACCOUNT`) |
 | `/uploads/<filename>` | GET | ✅ |
 | `/health/db` | GET | — |
 
@@ -116,7 +124,7 @@ To confirm which code your browser is actually talking to, open
 **http://127.0.0.1:5555/health/db**. It returns the running build tag:
 
 ```json
-{"db": "ok", "build": "minimal-2 (preview + robust download)"}
+{"db": "ok", "build": "minimal-4 (share links + 30-day trash + account deletion)"}
 ```
 
 If the `build` value is missing or older, you are still on a stale server.
