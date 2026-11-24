@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <title>Dashboard</title>
+<script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 <script>
   // Apply saved theme before first paint (default dark) to avoid a theme flash
   try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('vault_theme') || 'dark'); }
@@ -1046,6 +1048,71 @@
     text-overflow:ellipsis;
   }
   .share-options{display:flex; flex-direction:column; gap:18px; margin-bottom:18px;}
+  .share-select,
+  .share-password{
+    width:100%;
+    font-family:inherit;
+    font-size:13.5px;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:12px;
+    padding:11px 12px;
+    outline:none;
+  }
+  .share-select:focus,
+  .share-password:focus{border-color:var(--purple);}
+  .share-option-hint{
+    display:block;
+    font-size:11.5px;
+    color:var(--muted);
+    margin-top:6px;
+    line-height:1.45;
+  }
+  .contact-add-row{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    margin-top:10px;
+  }
+  .contact-add-row input{
+    flex:1 1 140px;
+    min-width:0;
+    font-family:inherit;
+    font-size:12.5px;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    padding:9px 10px;
+    outline:none;
+  }
+  .contact-add-row input:focus{border-color:var(--purple);}
+  .contact-add-row button{
+    font-family:inherit;
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--purple);
+    background:var(--purple-tint);
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    padding:9px 13px;
+    cursor:pointer;
+  }
+  .contacts-list{
+    display:flex;
+    flex-wrap:wrap;
+    gap:7px;
+    margin-top:10px;
+  }
+  .contact-chip{
+    font-size:12px;
+    background:var(--surface-soft);
+    border:1px solid var(--border);
+    border-radius:999px;
+    padding:5px 10px;
+    color:var(--muted);
+  }
   .share-option-title{
     display:block;
     font-size:12px;
@@ -1203,6 +1270,108 @@
   html[data-theme="dark"] .trash-btn.purge{color:#FCA5A5; background:#3B2426;}
   .trash-btn:disabled{opacity:.6; cursor:default;}
 
+  /* Voice assistant */
+  .voice-fab{
+    position:fixed; right:24px; bottom:24px; z-index:70;
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:inherit; font-size:13px; font-weight:700;
+    color:#fff; background:var(--purple);
+    border:none; border-radius:999px; padding:12px 17px;
+    box-shadow:0 12px 30px rgba(91,63,224,.32);
+    cursor:pointer;
+  }
+  .voice-fab:hover{transform:translateY(-1px);}
+  .voice-fab.open{opacity:.85;}
+  .voice-panel{
+    position:fixed; right:24px; bottom:82px; z-index:71;
+    display:none; flex-direction:column;
+    width:min(390px, calc(100vw - 32px));
+    max-height:min(620px, calc(100vh - 120px));
+    background:var(--surface);
+    color:var(--ink);
+    border:1.5px solid var(--border);
+    border-radius:20px;
+    box-shadow:0 24px 60px rgba(0,0,0,.28);
+    overflow:hidden;
+  }
+  .voice-panel.open{display:flex;}
+  .voice-head{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+    padding:16px 18px 12px; border-bottom:1px solid var(--border);
+    background:var(--surface-soft);
+  }
+  .voice-head strong{display:block; font-size:14px;}
+  .voice-head span{display:block; font-size:11.5px; color:var(--muted); margin-top:3px;}
+  .voice-close{
+    border:none; background:transparent; color:var(--muted);
+    font-size:16px; cursor:pointer; padding:2px 4px;
+  }
+  .voice-log{
+    flex:1 1 auto; min-height:120px; max-height:330px; overflow-y:auto;
+    padding:14px 16px; display:flex; flex-direction:column; gap:9px;
+  }
+  .voice-msg{
+    max-width:92%; padding:9px 11px; border-radius:13px;
+    font-size:12.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word;
+  }
+  .voice-msg.assistant{align-self:flex-start; background:var(--surface-soft); border:1px solid var(--border);}
+  .voice-msg.user{align-self:flex-end; background:var(--purple-tint); color:var(--ink);}
+  .voice-msg.blocked{border-color:#F59E0B; background:#FFF7E6; color:#7C4A03;}
+  html[data-theme="dark"] .voice-msg.blocked{background:#382B16; color:#FCD34D; border-color:#8A6420;}
+  .voice-msg.error{border-color:#FCA5A5; background:#FEF2F2; color:#991B1B;}
+  html[data-theme="dark"] .voice-msg.error{background:#3B2021; color:#FCA5A5; border-color:#7F1D1D;}
+  .voice-link-card{
+    align-self:stretch; display:flex; flex-direction:column; gap:6px;
+    border:1.5px solid var(--border); border-radius:12px; padding:9px;
+    background:var(--surface-soft);
+  }
+  .voice-link-row{display:flex; gap:6px;}
+  .voice-link-row input{
+    flex:1; min-width:0; font-family:inherit; font-size:11.5px;
+    color:var(--ink); background:var(--surface);
+    border:1px solid var(--border); border-radius:8px; padding:7px 8px;
+  }
+  .voice-link-row button{
+    font-family:inherit; font-size:11.5px; font-weight:700;
+    color:var(--purple); background:var(--purple-tint);
+    border:none; border-radius:8px; padding:0 10px; cursor:pointer;
+  }
+  .voice-pending{
+    display:none; gap:8px; padding:11px 16px 4px;
+    border-top:1px solid var(--border);
+  }
+  .voice-pending.open{display:block;}
+  .voice-pending p{font-size:12px; line-height:1.45; color:var(--muted); margin:0 0 8px;}
+  .voice-pending-actions{display:flex; gap:8px;}
+  .voice-pending-actions button{
+    flex:1; font-family:inherit; font-size:12px; font-weight:700;
+    border-radius:9px; padding:8px 10px; cursor:pointer;
+  }
+  .voice-confirm{color:#fff; background:var(--purple); border:none;}
+  .voice-cancel{color:var(--ink); background:var(--surface-soft); border:1.5px solid var(--border);}
+  .voice-controls{
+    display:flex; align-items:center; gap:10px;
+    padding:12px 16px 8px; border-top:1px solid var(--border);
+    background:var(--surface);
+  }
+  .voice-mic{
+    display:inline-flex; align-items:center; gap:7px; flex-shrink:0;
+    font-family:inherit; font-size:12.5px; font-weight:700;
+    color:#fff; background:var(--purple); border:none;
+    border-radius:999px; padding:10px 14px; cursor:pointer;
+  }
+  .voice-mic.listening{background:#DC2626; animation:voicePulse 1.2s infinite;}
+  .voice-mic:disabled{opacity:.55; cursor:default; animation:none;}
+  .voice-status{font-size:11.5px; line-height:1.4; color:var(--muted);}
+  .voice-privacy{
+    margin:0; padding:0 16px 13px;
+    font-size:10.5px; line-height:1.45; color:var(--muted);
+  }
+  @keyframes voicePulse{
+    0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.35);}
+    50%{box-shadow:0 0 0 8px rgba(220,38,38,0);}
+  }
+
   @media (max-width:600px){
     .title-block h1{font-size:23px;}
     header{align-items:stretch;}
@@ -1210,6 +1379,8 @@
     .field-row{grid-template-columns:1fr;}
     .preview-overlay{padding:0;}
     .preview-card{width:100%; height:100%;}
+    .voice-fab{right:16px; bottom:16px;}
+    .voice-panel{right:8px; left:8px; bottom:72px; width:auto; max-height:calc(100vh - 96px);}
   }
 </style>
 </head>
@@ -1270,6 +1441,7 @@
 
   <!-- Folder actions (shown after selecting a folder) -->
   <div class="folder-actions" id="folderActions" style="display:none;">
+    <button type="button" class="select-toggle-btn" id="shareFolderBtn">Share folder</button>
     <button type="button" class="delete-selected-btn" id="docRemoveFolderBtn">Remove folder</button>
   </div>
 
@@ -1279,6 +1451,7 @@
     <div class="upload-panel" id="dropzone">
       <p>Drag files here to add them, or <strong>pick a folder and browse</strong>.</p>
       <form id="uploadForm" action="/documents/upload" method="POST" enctype="multipart/form-data" class="upload-row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <select id="targetFolder" name="folder"></select>
         <button type="button" class="btn-primary" id="browseBtn">Choose files</button>
         <input type="file" id="fileInput" name="files" multiple>
@@ -1327,6 +1500,7 @@
     <h2>Edit Profile</h2>
 
     <form id="profileForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="photo-row">
         <div class="photo-preview" id="photoPreview">A</div>
         <div class="photo-actions">
@@ -1438,6 +1612,24 @@
     <div class="settings-section-title">Hidden folders</div>
     <div class="hidden-folders" id="hiddenFoldersList"></div>
 
+    <div class="settings-section-title">Share contacts</div>
+    <div class="contacts-list" id="contactsList"></div>
+    <div class="contact-add-row">
+      <input type="text" id="contactName" maxlength="150" placeholder="Name (e.g. Rahul)" autocomplete="off">
+      <input type="email" id="contactEmail" maxlength="150" placeholder="Email" autocomplete="off">
+      <button type="button" id="addContactBtn">Add contact</button>
+    </div>
+    <p class="share-option-hint">Only these saved addresses can receive a share. Voice never types an email address.</p>
+
+    <div class="settings-section-title">Share links</div>
+    <div class="danger-row" style="border-color:var(--border);">
+      <div>
+        <div class="label">Manage share links</div>
+        <div class="desc">See access history and revoke active links.</div>
+      </div>
+      <a href="/shares" class="btn-change-password">Manage</a>
+    </div>
+
     <div class="settings-section-title">Notepad</div>
     <div class="danger-row">
       <div>
@@ -1510,6 +1702,18 @@
 
     <div id="shareForm">
       <div class="share-options">
+        <div class="share-option-group">
+          <span class="share-option-title">Send to a saved contact</span>
+          <select id="shareContact" class="share-select">
+            <option value="">No email — copy the link myself</option>
+          </select>
+          <span class="share-option-hint">Only saved contacts can receive a share. Add contacts under Settings.</span>
+        </div>
+        <div class="share-option-group">
+          <span class="share-option-title">Link password (optional)</span>
+          <input type="password" id="sharePassword" class="share-password" maxlength="128" autocomplete="new-password" placeholder="Leave blank for no password">
+          <span class="share-option-hint">If set, send the password to the recipient through a different channel. It is never included in the email.</span>
+        </div>
         <div class="share-option-group">
           <span class="share-option-title">Link expires after</span>
           <div class="choice-row">
@@ -1593,6 +1797,40 @@
   </div>
 </div>
 
+<!-- Tap-to-talk voice assistant (microphone only; no command text box) -->
+<button type="button" class="voice-fab" id="voiceFab" aria-label="Open voice assistant" aria-expanded="false">
+  <span aria-hidden="true">🎙</span> Voice
+</button>
+<div class="voice-panel" id="voicePanel" role="dialog" aria-modal="false" aria-label="Voice assistant" aria-hidden="true">
+  <div class="voice-head">
+    <div>
+      <strong>Voice assistant</strong>
+      <span>Tap the mic, speak in English. Actions are confirmed first.</span>
+    </div>
+    <button type="button" class="voice-close" id="voiceCloseBtn" aria-label="Close voice assistant">✕</button>
+  </div>
+  <div class="voice-log" id="voiceLog" aria-live="polite">
+    <div class="voice-msg assistant">Tap the microphone and ask me to list or search files, open a folder, summarize your vault, list saved contacts, create a note, or prepare a share. I cannot delete files, change passwords, or accept an email address by voice.</div>
+  </div>
+  <div class="voice-pending" id="voicePending">
+    <p id="voicePendingText"></p>
+    <div class="voice-pending-actions">
+      <button type="button" class="voice-cancel" id="voiceCancelBtn">Cancel</button>
+      <button type="button" class="voice-confirm" id="voiceConfirmBtn">Confirm</button>
+    </div>
+  </div>
+  <div class="voice-controls">
+    <button type="button" class="voice-mic" id="voiceMicBtn" aria-label="Start listening">
+      <span aria-hidden="true">🎙</span> <span id="voiceMicLabel">Tap to talk</span>
+    </button>
+    <span class="voice-status" id="voiceStatus">Ready. Microphone stays off until you tap.</span>
+  </div>
+  <p class="voice-privacy">
+    Your browser handles speech recognition and playback. The server receives only the recognized
+    text, stores no transcript or audio, and re-checks every confirmed action against your account.
+  </p>
+</div>
+
 <script>
   // Icons/tints for the built-in folders. Visible built-in names come from the
   // backend so folders the user removed stay hidden.
@@ -1632,6 +1870,13 @@
   // Trashed files (server-rendered, refreshed from /trash/list when opened)
   let trashItems = {{ trash|tojson }};
 
+  // Saved recipients. Voice may only select these; it never dictates an email.
+  let shareContacts = [
+    {% for contact in contacts %}
+    { id: {{ contact.id }}, name: {{ contact.name|tojson }}, email: {{ contact.email|tojson }} }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+
   const folderRow = document.getElementById('folderRow');
   const docGrid = document.getElementById('docGrid');
   const targetFolder = document.getElementById('targetFolder');
@@ -1658,6 +1903,13 @@
   const doneShareBtn = document.getElementById('doneShareBtn');
   const copyShareBtn = document.getElementById('copyShareBtn');
   const createShareBtn = document.getElementById('createShareBtn');
+  const shareFolderBtn = document.getElementById('shareFolderBtn');
+  const shareContact = document.getElementById('shareContact');
+  const sharePassword = document.getElementById('sharePassword');
+  const contactsList = document.getElementById('contactsList');
+  const contactName = document.getElementById('contactName');
+  const contactEmail = document.getElementById('contactEmail');
+  const addContactBtn = document.getElementById('addContactBtn');
   const trashModal = document.getElementById('trashModal');
   const trashList = document.getElementById('trashList');
   const trashBadge = document.getElementById('trashBadge');
@@ -1872,11 +2124,42 @@
   previewModal.addEventListener('click', e => { if(e.target === previewModal) closePreview(); });
 
   // --- Expiring share links ---
-  let shareDoc = null;
+  let shareTarget = null;
 
-  function openShareModal(doc){
-    shareDoc = doc;
-    shareFileName.textContent = doc.name || '';
+  function renderShareContacts(){
+    if(!shareContact) return;
+    const selected = shareContact.value;
+    shareContact.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'No email — copy the link myself';
+    shareContact.appendChild(none);
+    shareContacts.forEach(contact => {
+      const option = document.createElement('option');
+      option.value = String(contact.id);
+      option.textContent = `${contact.name} <${contact.email}>`;
+      shareContact.appendChild(option);
+    });
+    if(selected && shareContacts.some(c => String(c.id) === selected)) shareContact.value = selected;
+  }
+
+  function renderContacts(){
+    if(!contactsList) return;
+    contactsList.innerHTML = '';
+    if(shareContacts.length === 0){
+      contactsList.innerHTML = '<span class="none">No saved contacts yet.</span>';
+    } else {
+      shareContacts.forEach(contact => {
+        const chip = document.createElement('span');
+        chip.className = 'contact-chip';
+        chip.textContent = `${contact.name} · ${contact.email}`;
+        contactsList.appendChild(chip);
+      });
+    }
+    renderShareContacts();
+  }
+
+  function resetShareForm(){
     shareForm.style.display = 'block';
     shareResult.classList.remove('open');
     shareLinkInput.value = '';
@@ -1885,10 +2168,26 @@
     shareError.style.display = 'none';
     createShareBtn.disabled = false;
     createShareBtn.textContent = 'Create link';
+    shareContact.value = '';
+    sharePassword.value = '';
     const oneHour = document.querySelector('input[name="shareExpiry"][value="1h"]');
     const multi = document.querySelector('input[name="shareUsage"][value="multi"]');
     if(oneHour) oneHour.checked = true;
     if(multi) multi.checked = true;
+    renderShareContacts();
+  }
+
+  function openShareModal(doc){
+    shareTarget = { kind: 'document', id: doc.id, name: doc.name || '' };
+    shareFileName.textContent = doc.name || '';
+    resetShareForm();
+    shareModal.classList.add('open');
+  }
+
+  function openFolderShare(name){
+    shareTarget = { kind: 'folder', name: name };
+    shareFileName.textContent = `Folder: ${name}`;
+    resetShareForm();
     shareModal.classList.add('open');
   }
 
@@ -1899,7 +2198,7 @@
 
   function closeShareModal(){
     shareModal.classList.remove('open');
-    shareDoc = null;
+    shareTarget = null;
     shareResult.classList.remove('open');
     shareLinkInput.value = '';
     shareCopied.textContent = '';
@@ -1917,6 +2216,10 @@
   doneShareBtn.addEventListener('click', closeShareModal);
   shareModal.addEventListener('click', e => { if(e.target === shareModal) closeShareModal(); });
 
+  shareFolderBtn.addEventListener('click', () => {
+    if(activeFolder !== 'all') openFolderShare(activeFolder);
+  });
+
   copyShareBtn.addEventListener('click', async () => {
     if(!shareLinkInput.value) return;
     try {
@@ -1929,11 +2232,21 @@
   });
 
   createShareBtn.addEventListener('click', async () => {
-    if(!shareDoc) return;
+    if(!shareTarget) return;
     const expiryEl = document.querySelector('input[name="shareExpiry"]:checked');
     const usageEl = document.querySelector('input[name="shareUsage"]:checked');
     const expiry = expiryEl ? expiryEl.value : '1h';
     const usage = usageEl ? usageEl.value : 'multi';
+    const endpoint = shareTarget.kind === 'folder'
+      ? '/folders/share'
+      : `/documents/${shareTarget.id}/share`;
+    const payload = {
+      expiry: expiry,
+      usage: usage,
+      contact_id: shareContact.value || null,
+      password: sharePassword.value || ''
+    };
+    if(shareTarget.kind === 'folder') payload.name = shareTarget.name;
 
     shareError.textContent = '';
     shareError.style.display = 'none';
@@ -1941,15 +2254,19 @@
     createShareBtn.textContent = 'Creating…';
 
     try {
-      const res = await fetch(`/documents/${shareDoc.id}/share`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expiry: expiry, usage: usage })
+        body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
       if(res.ok && data.status === 'ok'){
         shareLinkInput.value = data.url;
-        shareCopied.textContent = `Link expires in ${data.expires_in}.`;
+        let message = `Link expires in ${data.expires_in}.`;
+        if(data.email_sent) message += ' Email sent to the saved contact.';
+        else if(data.recipient) message += ' Email could not be sent — copy the link and send it yourself.';
+        if(data.has_password) message += ' Send the link password separately.';
+        shareCopied.textContent = message;
         shareForm.style.display = 'none';
         shareResult.classList.add('open');
         shareLinkInput.focus();
@@ -1965,6 +2282,41 @@
     createShareBtn.disabled = false;
     createShareBtn.textContent = 'Create link';
   });
+
+  async function addContact(){
+    const name = (contactName.value || '').trim();
+    const email = (contactEmail.value || '').trim();
+    if(!name || !email){
+      alert('Enter a contact name and email.');
+      return;
+    }
+    addContactBtn.disabled = true;
+    addContactBtn.textContent = 'Adding…';
+    try {
+      const res = await fetch('/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, email: email })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.status === 'ok'){
+        shareContacts.push(data.contact);
+        shareContacts.sort((a, b) => a.name.localeCompare(b.name));
+        contactName.value = '';
+        contactEmail.value = '';
+        renderContacts();
+      } else {
+        alert(data.message || 'Could not add the contact.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Network error. Please try again.');
+    }
+    addContactBtn.disabled = false;
+    addContactBtn.textContent = 'Add contact';
+  }
+
+  addContactBtn.addEventListener('click', addContact);
 
   // --- Trash (30-day recycle bin) ---
   function updateTrashBadge(count){
@@ -2405,6 +2757,7 @@
 
   renderAll();
   renderHiddenFolders();
+  renderContacts();
 
   // --- Notepad / Database Connected Notes ---
   let notes = [
@@ -3006,5 +3359,6 @@
   })();
 </script>
 <script src="{{ url_for('static', filename='js/flash.js') }}"></script>
+<script src="{{ url_for('static', filename='js/voice.js') }}"></script>
 </body>
 </html>

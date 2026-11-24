@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <title>Secure Vault — Log In</title>
+<script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -491,6 +493,7 @@
     {# timer lives only on the login button when locked #}
 
     <form id="loginForm" method="POST" action="/login" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field-group" id="emailField">
         <label for="email">Email or username</label>
         <div class="field-wrap">

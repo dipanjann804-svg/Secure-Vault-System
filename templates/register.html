@@ -293,6 +293,7 @@
     {% endif %}
 
     <form id="registerForm" method="POST" action="/register" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field-row">
         <div class="field-group" id="usernameField">
           <label for="username">Username</label>

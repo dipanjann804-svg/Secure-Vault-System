@@ -10,17 +10,21 @@ import secrets
 import subprocess
 import threading
 import atexit
+import tempfile
+import zipfile
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
 from flask import (
     Flask, render_template, url_for, request, redirect, flash, 
-    send_from_directory, send_file, jsonify, abort, current_app
+    send_from_directory, send_file, jsonify, abort, current_app,
+    after_this_request, session
 )
 from flask_login import (
     LoginManager, login_user, login_required, current_user, logout_user
 )
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -28,11 +32,16 @@ from sqlalchemy import text, func, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
 
-from models import db, User, Document, Note, ShareLink, SecurityLog
+from models import (
+    db, User, Document, Note, ShareLink, ShareLinkItem, ShareAccess, Contact,
+    VoiceContext, SecurityLog,
+)
 from encryption import encrypt_note, decrypt_note
-from email_service import send_password_reset_email
+from email_service import send_password_reset_email, send_share_email
+from voice import create_voice_blueprint
 
 login_manager = LoginManager()
+csrf = CSRFProtect()
 
 # Built-in folders shown by default. Users can create more by naming their own
 # folder from the "Add files" tile on the dashboard.
@@ -58,6 +67,23 @@ DELETE_ACCOUNT_PHRASE = 'DELETE MY ACCOUNT'
 SHARE_EXPIRY_MINUTES = {'10m': 10, '1h': 60, '24h': 24 * 60}
 # usage choice -> max downloads (None = unlimited)
 SHARE_USAGE = {'once': 1, 'multi': None}
+SHARE_KIND_DOCUMENT = 'document'
+SHARE_KIND_FOLDER = 'folder'
+# A folder bundle is built in memory/temp storage; cap it so one request cannot
+# exhaust the host. Individual uploads are already capped at 50 MB.
+SHARE_BUNDLE_MAX_BYTES = 200 * 1024 * 1024
+SHARE_PASSWORD_MIN = 6
+SHARE_PASSWORD_MAX = 128
+# In-memory share-creation rate limiter (per user, per hour). This mirrors the
+# app's existing login limiter; a multi-worker deployment should move it to a
+# shared store later.
+SHARE_CREATE_LIMIT = 20
+SHARE_CREATE_WINDOW = 3600
+_share_create_attempts = {}
+# In-memory password gate limiter (per link + IP).
+SHARE_PASSWORD_ATTEMPTS = 6
+SHARE_PASSWORD_WINDOW = 600
+_share_password_attempts = {}
 
 # --- Login lockout policy (ported from time.py) ---
 MAX_ATTEMPTS = 6
@@ -196,12 +222,235 @@ def _lookup_share_link(token):
 
 
 def _share_link_unavailable(link):
-    """True when a link has expired or used up its allowed downloads."""
+    """True when a link is revoked, expired, or used up its allowed downloads."""
+    if link.revoked_at:
+        return True
     if link.expires_at and link.expires_at <= datetime.utcnow():
         return True
     if link.max_uses is not None and (link.use_count or 0) >= link.max_uses:
         return True
     return False
+
+
+def _share_kind(link):
+    """Return 'folder' for a bundle link, otherwise 'document'."""
+    if link.share_kind in (SHARE_KIND_DOCUMENT, SHARE_KIND_FOLDER):
+        return link.share_kind
+    return SHARE_KIND_FOLDER if link.folder and not link.document_id else SHARE_KIND_DOCUMENT
+
+
+def _share_documents(link):
+    """Resolve the live documents behind a link.
+
+    Returns a list, or None when any expected document is missing or trashed.
+    A folder bundle is frozen at creation time; if one member later disappears
+    the whole link is treated as unavailable rather than silently shrinking.
+    """
+    if _share_kind(link) == SHARE_KIND_FOLDER:
+        item_ids = [item.document_id for item in sorted(link.items, key=lambda i: i.id)]
+        if not item_ids:
+            return None
+        docs = Document.query.filter(
+            Document.id.in_(item_ids),
+            Document.user_id == link.user_id,
+            Document.deleted_at.is_(None),
+        ).all()
+        by_id = {doc.id: doc for doc in docs}
+        if len(by_id) != len(item_ids):
+            return None
+        return [by_id[doc_id] for doc_id in item_ids if doc_id in by_id]
+
+    if not link.document_id:
+        return None
+    doc = Document.query.filter_by(
+        id=link.document_id,
+        user_id=link.user_id,
+        deleted_at=None,
+    ).first()
+    return [doc] if doc else None
+
+
+def _share_label(link, docs=None):
+    """Human-readable label for a share, used by the management page."""
+    if _share_kind(link) == SHARE_KIND_FOLDER:
+        return link.folder or "Shared folder"
+    docs = docs if docs is not None else _share_documents(link)
+    if docs:
+        return docs[0].original_filename
+    return "Shared document"
+
+
+def _mask_ip(ip):
+    """Mask an IP for display in share access history."""
+    ip = (ip or "").strip()
+    if not ip:
+        return "—"
+    if ":" in ip:
+        parts = ip.split(":")
+        return ":".join(parts[:2]) + ":…"
+    parts = ip.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.{parts[1]}.x.x"
+    return ip
+
+
+def _valid_email(value):
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", (value or "").strip()))
+
+
+def _share_create_rate_limited(user_id):
+    """Allow a bounded number of share creations per user per hour."""
+    now = time.time()
+    attempts = [
+        ts for ts in _share_create_attempts.get(user_id, [])
+        if now - ts < SHARE_CREATE_WINDOW
+    ]
+    if len(attempts) >= SHARE_CREATE_LIMIT:
+        _share_create_attempts[user_id] = attempts
+        return True
+    attempts.append(now)
+    _share_create_attempts[user_id] = attempts
+    return False
+
+
+def _share_password_key(link):
+    return f"{link.id}:{request.remote_addr or 'unknown'}"
+
+
+def _share_password_blocked(link):
+    """Brute-force guard for a protected link, per link + source IP."""
+    now = time.time()
+    key = _share_password_key(link)
+    attempts = [
+        ts for ts in _share_password_attempts.get(key, [])
+        if now - ts < SHARE_PASSWORD_WINDOW
+    ]
+    if attempts:
+        _share_password_attempts[key] = attempts
+    else:
+        _share_password_attempts.pop(key, None)
+    return len(attempts) >= SHARE_PASSWORD_ATTEMPTS
+
+
+def _record_share_password_failure(link):
+    key = _share_password_key(link)
+    _share_password_attempts.setdefault(key, []).append(time.time())
+
+
+def _clear_share_password_failures(link):
+    _share_password_attempts.pop(_share_password_key(link), None)
+
+
+def _security_event(tool, outcome, status="SUCCESS", user_id=None, login_id=None):
+    """Queue a SecurityLog row. The caller owns the transaction/commit."""
+    db.session.add(SecurityLog(
+        user_id=user_id,
+        login_id=(login_id or "")[:150] or None,
+        ip_address=(request.remote_addr or "")[:45] or None,
+        status=status,
+        user_agent=(request.user_agent.string or "")[:255] or None,
+        tool=tool[:60],
+        outcome=(outcome or "")[:30] or None,
+    ))
+
+
+def _record_share_access(link, outcome):
+    """Persist one access-history row and a matching security event."""
+    db.session.add(ShareAccess(
+        share_id=link.id,
+        ip_address=(request.remote_addr or "")[:45] or None,
+        user_agent=(request.user_agent.string or "")[:255] or None,
+        outcome=outcome,
+    ))
+    _security_event(
+        "share_access",
+        outcome,
+        status="SUCCESS" if outcome in ("opened", "granted", "downloaded") else "FAILED",
+        user_id=link.user_id,
+        login_id=link.recipient_email or "public-share",
+    )
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _build_share_zip(docs):
+    """Build a temporary ZIP for a frozen folder bundle.
+
+    Returns the temp path. The caller must remove it after the response closes.
+    """
+    total = 0
+    for doc in docs:
+        if not doc.file_path or not os.path.isfile(doc.file_path):
+            raise FileNotFoundError(doc.original_filename or doc.filename or "document")
+        total += os.path.getsize(doc.file_path)
+    if total > SHARE_BUNDLE_MAX_BYTES:
+        raise ValueError("bundle-too-large")
+
+    fd, path = tempfile.mkstemp(prefix="vault-share-", suffix=".zip")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            used = set()
+            for doc in docs:
+                base = secure_filename(
+                    doc.original_filename or doc.filename or f"document-{doc.id}"
+                ) or f"document-{doc.id}"
+                stem, ext = os.path.splitext(base)
+                name = base
+                n = 2
+                while name.lower() in used:
+                    name = f"{stem} ({n}){ext}"
+                    n += 1
+                used.add(name.lower())
+                archive.write(doc.file_path, arcname=name)
+        return path
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+
+
+def _share_request_options(data, user_id):
+    """Validate the JSON/form options shared by document and folder links.
+
+    Returns (options, error). ``options`` contains a hashed password and a
+    contact snapshot; raw passwords never touch the database or logs.
+    """
+    expiry = (data.get("expiry") or "").strip().lower()
+    usage = (data.get("usage") or "").strip().lower()
+    password = str(data.get("password") or "")
+    contact_raw = str(data.get("contact_id") or "").strip()
+
+    if expiry not in SHARE_EXPIRY_MINUTES:
+        return None, "Choose an expiry time."
+    if usage not in SHARE_USAGE:
+        return None, "Choose how often the link can be used."
+    if password and len(password) < SHARE_PASSWORD_MIN:
+        return None, f"Link password must be at least {SHARE_PASSWORD_MIN} characters."
+    if len(password) > SHARE_PASSWORD_MAX:
+        return None, f"Link password must be at most {SHARE_PASSWORD_MAX} characters."
+
+    contact = None
+    if contact_raw:
+        try:
+            contact_id = int(contact_raw)
+        except (TypeError, ValueError):
+            return None, "Choose a saved contact."
+        contact = Contact.query.filter_by(id=contact_id, user_id=user_id).first()
+        if contact is None:
+            return None, "That contact is not in your address book."
+
+    return {
+        "expiry": expiry,
+        "usage": usage,
+        "password_hash": generate_password_hash(password) if password else None,
+        "contact": contact,
+        "expires_at": datetime.utcnow() + timedelta(minutes=SHARE_EXPIRY_MINUTES[expiry]),
+    }, None
 
 
 def _share_time_left(expires_at):
@@ -344,18 +593,30 @@ def _compress_into_trash(doc):
 
 
 def _move_documents_to_trash(docs):
-    """Move documents to the trash and revoke their share links.
+    """Move documents to the trash and retire their share links.
 
-    Share links are deleted in the same transaction, so a link stops working
-    the moment the file leaves the live folders. Returns how many moved.
+    Single-document links are deleted together with their access rows; folder
+    bundles are revoked but kept so the owner still sees their access history.
+    Either way, a link stops working the moment a file leaves the live folders.
+    Returns how many documents moved.
     """
     moved = 0
     for doc in docs:
         if doc.deleted_at:
             continue
         if _compress_into_trash(doc):
-            # Revoke links only once the bytes are safely in the trash.
-            ShareLink.query.filter_by(document_id=doc.id).delete(synchronize_session=False)
+            # Revoke/delete every link that points at this document. Folder
+            # bundles are revoked (access history kept); single-document links
+            # are deleted with their access rows by the ORM cascade.
+            links = ShareLink.query.filter(
+                (ShareLink.document_id == doc.id) |
+                ShareLink.items.any(ShareLinkItem.document_id == doc.id)
+            ).all()
+            for link in links:
+                if _share_kind(link) == SHARE_KIND_FOLDER:
+                    link.revoked_at = datetime.utcnow()
+                else:
+                    db.session.delete(link)
             moved += 1
     return moved
 
@@ -537,10 +798,39 @@ def create_app():
     os.makedirs(trash_folder, exist_ok=True)
     app.config['TRASH_FOLDER'] = trash_folder
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max upload
+    # Used by the voice assistant to list built-in folders that are not hidden.
+    app.config['VOICE_DEFAULT_FOLDERS'] = list(ALLOWED_FOLDERS)
 
     db.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = "login"
+    # CSRF is required on every POST, including JSON fetches (X-CSRFToken).
+    app.config['WTF_CSRF_TIME_LIMIT'] = 3600
+    csrf.init_app(app)
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(error):
+        if request.is_json or request.path.startswith('/voice'):
+            return jsonify({
+                "status": "error",
+                "message": "Your session token is missing or expired. Refresh the page and try again.",
+            }), 400
+        flash("Your form session expired. Please try again.", "error")
+        # Only redirect to a local path. Never trust Referer for a redirect.
+        if request.path.startswith('/s/'):
+            return redirect(request.path)
+        return redirect(url_for("index"))
+
+    @app.after_request
+    def _share_security_headers(response):
+        """Never let a public share response sit in a cache."""
+        if request.path.startswith('/s/'):
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Referrer-Policy'] = 'no-referrer'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
 
     with app.app_context():
         try:
@@ -956,6 +1246,10 @@ def create_app():
                 "created_at": n.created_at.strftime("%Y-%m-%d %H:%M") if n.created_at else ""
             })
 
+        contacts = Contact.query.filter_by(user_id=current_user.id).order_by(
+            Contact.name.asc()
+        ).all()
+
         # Build the folder list: built-in folders plus any custom folders the user
         # created through "Add files" (inferred from their uploaded documents).
         custom_folders = sorted({
@@ -979,6 +1273,7 @@ def create_app():
             "documents": documents,
             "notes": notes,
             "trash": trash,
+            "contacts": contacts,
             "folders": folders,
             "default_folders": [f for f in ALLOWED_FOLDERS if f not in hidden_folders],
             "hidden_folders": [f for f in ALLOWED_FOLDERS if f in hidden_folders],
@@ -1110,6 +1405,120 @@ def create_app():
         return response
 
     # --- Public share links ---
+    def _create_share_record(docs, kind, folder, options):
+        """Create a share row, freeze a folder bundle, and email a saved contact."""
+        token = secrets.token_urlsafe(32)  # 256 bits; only the hash is stored
+        contact = options["contact"]
+        link = ShareLink(
+            user_id=current_user.id,
+            document_id=docs[0].id if kind == SHARE_KIND_DOCUMENT else None,
+            token=_hash_share_token(token),
+            max_uses=SHARE_USAGE[options["usage"]],
+            use_count=0,
+            expires_at=options["expires_at"],
+            password_hash=options["password_hash"],
+            share_kind=kind,
+            folder=folder,
+            recipient_contact_id=contact.id if contact else None,
+            recipient_name=contact.name if contact else None,
+            recipient_email=contact.email if contact else None,
+        )
+        db.session.add(link)
+        if kind == SHARE_KIND_FOLDER:
+            for doc in docs:
+                db.session.add(ShareLinkItem(share=link, document_id=doc.id))
+
+        _security_event(
+            "share_create",
+            kind,
+            user_id=current_user.id,
+            login_id=(contact.email if contact else current_user.email),
+        )
+        db.session.commit()
+
+        share_url = url_for("shared_file", token=token, _external=True)
+        email_sent = False
+        email_message = ""
+        if contact:
+            result = send_share_email(
+                to_email=contact.email,
+                recipient_name=contact.name,
+                owner_name=current_user.name or current_user.username,
+                share_url=share_url,
+                expires_in=_share_time_left(link.expires_at),
+                item_label=_share_label(link, docs),
+                item_count=len(docs),
+                is_folder=(kind == SHARE_KIND_FOLDER),
+                has_password=bool(link.password_hash),
+            )
+            email_sent = bool(result)
+            email_message = result.message
+            if not email_sent:
+                print(f"[!] Share email failed for {contact.email}: {email_message}", flush=True)
+        return link, token, email_sent, email_message
+
+    def _voice_share_for_user(doc, contact, expiry, usage):
+        """Revalidate and create one voice-confirmed document share.
+
+        The voice layer supplies IDs only. This callback is the final authority:
+        it re-checks ownership, live-file state, saved-contact ownership, and
+        the allowed expiry/usage values before using the normal share path.
+        """
+        if _share_create_rate_limited(current_user.id):
+            return {
+                "ok": False,
+                "message": "Too many share links created. Try again later.",
+            }
+        doc = Document.query.filter_by(
+            id=doc.id, user_id=current_user.id, deleted_at=None
+        ).first()
+        if not doc or not doc.file_path or not os.path.isfile(doc.file_path):
+            return {
+                "ok": False,
+                "message": "That file is no longer available. Nothing was shared.",
+            }
+        contact = Contact.query.filter_by(
+            id=contact.id, user_id=current_user.id
+        ).first()
+        if not contact:
+            return {
+                "ok": False,
+                "message": "That saved contact is no longer available. Nothing was shared.",
+            }
+
+        options, error = _share_request_options({
+            "expiry": expiry,
+            "usage": usage,
+            "password": "",
+            "contact_id": str(contact.id),
+        }, current_user.id)
+        if error:
+            return {"ok": False, "message": error}
+
+        try:
+            link, token, email_sent, email_message = _create_share_record(
+                [doc], SHARE_KIND_DOCUMENT, None, options
+            )
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Voice share creation failed")
+            return {
+                "ok": False,
+                "message": "The share could not be created. Please try the share dialog.",
+            }
+
+        return {
+            "ok": True,
+            "url": url_for("shared_file", token=token, _external=True),
+            "recipient": contact.name,
+            "email_sent": email_sent,
+            "email_message": email_message,
+            "expires_in": _share_time_left(link.expires_at),
+            "usage": options["usage"],
+        }
+
+    app.register_blueprint(create_voice_blueprint(_voice_share_for_user))
+
     @app.route("/documents/<int:doc_id>/share", methods=["POST"])
     @login_required
     def create_share_link(doc_id):
@@ -1117,84 +1526,308 @@ def create_app():
         doc = Document.query.filter_by(
             id=doc_id, user_id=current_user.id, deleted_at=None
         ).first_or_404()
+        if not doc.file_path or not os.path.isfile(doc.file_path):
+            return jsonify({"status": "error", "message": "That file is missing on disk."}), 404
+        if _share_create_rate_limited(current_user.id):
+            return jsonify({
+                "status": "error",
+                "message": "Too many share links created. Try again later.",
+            }), 429
+
         data = (request.get_json(silent=True) or {}) if request.is_json else request.form
-        expiry = (data.get("expiry") or "").strip().lower()
-        usage = (data.get("usage") or "").strip().lower()
+        options, error = _share_request_options(data, current_user.id)
+        if error:
+            return jsonify({"status": "error", "message": error}), 400
 
-        if expiry not in SHARE_EXPIRY_MINUTES:
-            return jsonify({"status": "error", "message": "Choose an expiry time."}), 400
-        if usage not in SHARE_USAGE:
-            return jsonify({"status": "error", "message": "Choose how often the link can be used."}), 400
-
-        # The plaintext token only exists in this response; the DB stores its hash.
-        token = secrets.token_urlsafe(32)
-        link = ShareLink(
-            user_id=current_user.id,
-            document_id=doc.id,
-            token=_hash_share_token(token),
-            max_uses=SHARE_USAGE[usage],
-            use_count=0,
-            expires_at=datetime.utcnow() + timedelta(minutes=SHARE_EXPIRY_MINUTES[expiry]),
+        link, token, email_sent, email_message = _create_share_record(
+            [doc], SHARE_KIND_DOCUMENT, None, options
         )
-        db.session.add(link)
-        db.session.commit()
-
         return jsonify({
             "status": "ok",
             "url": url_for("shared_file", token=token, _external=True),
             "expires_in": _share_time_left(link.expires_at),
-            "usage": usage,
+            "usage": options["usage"],
+            "kind": SHARE_KIND_DOCUMENT,
+            "file_count": 1,
+            "recipient": link.recipient_name,
+            "email_sent": email_sent,
+            "email_message": email_message,
+            "has_password": bool(link.password_hash),
         })
 
-    @app.route("/s/<token>")
+    @app.route("/folders/share", methods=["POST"])
+    @login_required
+    def create_folder_share():
+        """Share a frozen snapshot of every live file in one folder."""
+        if _share_create_rate_limited(current_user.id):
+            return jsonify({
+                "status": "error",
+                "message": "Too many share links created. Try again later.",
+            }), 429
+
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        folder = _clean_folder_name(data.get("name"))
+        docs = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.deleted_at.is_(None),
+            func.lower(Document.folder) == folder.lower(),
+        ).order_by(Document.created_at.asc()).all()
+        if not docs:
+            return jsonify({
+                "status": "error",
+                "message": "That folder has no live files to share.",
+            }), 404
+        for doc in docs:
+            if not doc.file_path or not os.path.isfile(doc.file_path):
+                return jsonify({
+                    "status": "error",
+                    "message": f"'{doc.original_filename}' is missing on disk.",
+                }), 404
+
+        options, error = _share_request_options(data, current_user.id)
+        if error:
+            return jsonify({"status": "error", "message": error}), 400
+
+        link, token, email_sent, email_message = _create_share_record(
+            docs, SHARE_KIND_FOLDER, docs[0].folder, options
+        )
+        return jsonify({
+            "status": "ok",
+            "url": url_for("shared_file", token=token, _external=True),
+            "expires_in": _share_time_left(link.expires_at),
+            "usage": options["usage"],
+            "kind": SHARE_KIND_FOLDER,
+            "file_count": len(docs),
+            "recipient": link.recipient_name,
+            "email_sent": email_sent,
+            "email_message": email_message,
+            "has_password": bool(link.password_hash),
+        })
+
+    @app.route("/shares")
+    @login_required
+    def list_shares():
+        """Owner view of created links and their access history."""
+        links = ShareLink.query.filter_by(user_id=current_user.id).order_by(
+            ShareLink.created_at.desc()
+        ).all()
+        rows = []
+        for link in links:
+            docs = _share_documents(link)
+            accesses = sorted(
+                link.accesses, key=lambda item: item.timestamp or datetime.min, reverse=True
+            )[:25]
+            rows.append({
+                "id": link.id,
+                "kind": _share_kind(link),
+                "label": _share_label(link, docs),
+                "recipient_name": link.recipient_name,
+                "recipient_email": link.recipient_email,
+                "created_at": link.created_at.strftime("%b %d, %Y %H:%M") if link.created_at else "",
+                "expires_at": link.expires_at.strftime("%b %d, %Y %H:%M") if link.expires_at else "",
+                "expires_in": _share_time_left(link.expires_at),
+                "active": not _share_link_unavailable(link),
+                "revoked": bool(link.revoked_at),
+                "revoked_at": link.revoked_at.strftime("%b %d, %Y %H:%M") if link.revoked_at else "",
+                "used": link.use_count or 0,
+                "max_uses": link.max_uses,
+                "has_password": bool(link.password_hash),
+                "file_count": len(docs) if docs else 0,
+                "missing": docs is None,
+                "accesses": [{
+                    "outcome": access.outcome,
+                    "timestamp": access.timestamp.strftime("%b %d, %H:%M") if access.timestamp else "",
+                    "ip": _mask_ip(access.ip_address),
+                    "user_agent": (access.user_agent or "")[:80],
+                } for access in accesses],
+            })
+        return render_template("shares.html", share_rows=rows)
+
+    @app.route("/shares/<int:share_id>/revoke", methods=["POST"])
+    @login_required
+    def revoke_share_link(share_id):
+        link = ShareLink.query.filter_by(
+            id=share_id, user_id=current_user.id
+        ).first_or_404()
+        if link.revoked_at:
+            flash("That link was already revoked.", "error")
+            return redirect(url_for("list_shares"))
+        link.revoked_at = datetime.utcnow()
+        _security_event(
+            "share_revoke",
+            "revoked",
+            user_id=current_user.id,
+            login_id=link.recipient_email or current_user.email,
+        )
+        db.session.commit()
+        flash("Share link revoked. It stops working immediately.", "success")
+        return redirect(url_for("list_shares"))
+
+    @app.route("/contacts", methods=["GET", "POST"])
+    @login_required
+    def contacts():
+        """Saved recipients. Voice can only select these, never dictate an email."""
+        if request.method == "GET":
+            rows = Contact.query.filter_by(user_id=current_user.id).order_by(
+                Contact.name.asc()
+            ).all()
+            return jsonify({
+                "status": "ok",
+                "contacts": [
+                    {"id": row.id, "name": row.name, "email": row.email}
+                    for row in rows
+                ],
+            })
+
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        name = (data.get("name") or "").strip()[:150]
+        email = (data.get("email") or "").strip().lower()[:150]
+        if not name:
+            return jsonify({"status": "error", "message": "Contact name is required."}), 400
+        if not _valid_email(email):
+            return jsonify({"status": "error", "message": "Enter a valid contact email."}), 400
+        existing = Contact.query.filter(
+            Contact.user_id == current_user.id,
+            func.lower(Contact.email) == email,
+        ).first()
+        if existing:
+            return jsonify({"status": "error", "message": "That contact already exists."}), 409
+
+        contact = Contact(user_id=current_user.id, name=name, email=email)
+        db.session.add(contact)
+        try:
+            db.session.flush()
+            _security_event(
+                "contact_add", "created",
+                user_id=current_user.id, login_id=email,
+            )
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({"status": "error", "message": "That contact already exists."}), 409
+        return jsonify({
+            "status": "ok",
+            "contact": {"id": contact.id, "name": contact.name, "email": contact.email},
+        })
+
+    @app.route("/s/<token>", methods=["GET", "POST"])
     def shared_file(token):
-        """Public landing page for a share link (does not consume a download)."""
+        """Public landing page, password gate, and access history entry point."""
         link = _lookup_share_link(token)
         if link is None:
             abort(404)
         if _share_link_unavailable(link):
+            outcome = "revoked" if link.revoked_at else (
+                "exhausted" if link.max_uses is not None and
+                (link.use_count or 0) >= link.max_uses else "expired"
+            )
+            _record_share_access(link, outcome)
             return render_template("share_unavailable.html"), 410
 
-        doc = db.session.get(Document, link.document_id) if link.document_id else None
-        if doc is None:
-            abort(404)
-        if doc.deleted_at is not None:
-            # Owner moved it to trash: sharing stops at once.
+        docs = _share_documents(link)
+        if docs is None:
+            _record_share_access(link, "denied")
             return render_template("share_unavailable.html"), 410
-        if not doc.file_path or not os.path.isfile(doc.file_path):
-            abort(404)
 
+        protected = bool(link.password_hash)
+        access_key = f"share_ok_{link.id}"
+        granted = (not protected) or bool(session.get(access_key))
+        password_error = None
+
+        if request.method == "POST":
+            if not protected:
+                return redirect(url_for("shared_file", token=token))
+            if _share_password_blocked(link):
+                _record_share_access(link, "password_blocked")
+                return render_template(
+                    "share.html",
+                    token=token,
+                    needs_password=True,
+                    password_error="Too many attempts. Try again later.",
+                    protected=True,
+                ), 429
+            supplied = request.form.get("password") or ""
+            if check_password_hash(link.password_hash, supplied):
+                _clear_share_password_failures(link)
+                session[access_key] = True
+                _record_share_access(link, "granted")
+                return redirect(url_for("shared_file", token=token))
+            _record_share_password_failure(link)
+            _record_share_access(link, "password_failed")
+            granted = False
+            password_error = "That password is not correct."
+
+        if protected and not granted:
+            return render_template(
+                "share.html",
+                token=token,
+                needs_password=True,
+                password_error=password_error,
+                protected=True,
+            ), (401 if password_error else 200)
+
+        if request.method == "GET":
+            _record_share_access(link, "opened")
+
+        total_size = sum((doc.file_size or 0) for doc in docs)
         return render_template(
             "share.html",
             token=token,
-            doc=doc,
-            size_label=_format_file_size(doc.file_size),
+            needs_password=False,
+            protected=protected,
+            share_kind=_share_kind(link),
+            docs=docs,
+            label=_share_label(link, docs),
+            size_label=_format_file_size(total_size),
+            file_count=len(docs),
             expires_in=_share_time_left(link.expires_at),
             single_use=(link.max_uses == 1),
         )
 
-    @app.route("/s/<token>/download")
+    @app.route("/s/<token>/download", methods=["POST"])
     def shared_file_download(token):
-        """Download a shared file once per allowed use, with an atomic counter."""
+        """Consume one download atomically, then stream a file or frozen ZIP."""
         link = _lookup_share_link(token)
         if link is None:
             abort(404)
-        if link.expires_at and link.expires_at <= datetime.utcnow():
+        if _share_link_unavailable(link):
+            outcome = "revoked" if link.revoked_at else (
+                "exhausted" if link.max_uses is not None and
+                (link.use_count or 0) >= link.max_uses else "expired"
+            )
+            _record_share_access(link, outcome)
             return render_template("share_unavailable.html"), 410
 
-        doc = db.session.get(Document, link.document_id) if link.document_id else None
-        if doc is None:
-            abort(404)
-        if doc.deleted_at is not None:
-            # The owner moved the file to trash: the link is dead immediately.
+        docs = _share_documents(link)
+        if docs is None:
+            _record_share_access(link, "denied")
             return render_template("share_unavailable.html"), 410
-        if not doc.file_path or not os.path.isfile(doc.file_path):
-            abort(404)
+
+        if link.password_hash and not session.get(f"share_ok_{link.id}"):
+            _record_share_access(link, "denied")
+            return redirect(url_for("shared_file", token=token))
+
+        zip_path = None
+        if _share_kind(link) == SHARE_KIND_FOLDER:
+            try:
+                zip_path = _build_share_zip(docs)
+            except FileNotFoundError:
+                _record_share_access(link, "denied")
+                return render_template("share_unavailable.html"), 410
+            except ValueError:
+                _record_share_access(link, "denied")
+                return jsonify({
+                    "status": "error",
+                    "message": "This bundle is too large to download at once.",
+                }), 413
+
         # Claim one use atomically so two simultaneous requests cannot both succeed.
         query = ShareLink.query.filter(
             ShareLink.id == link.id,
-            ShareLink.expires_at > datetime.utcnow(),
+            ShareLink.revoked_at.is_(None),
         )
+        if link.expires_at:
+            query = query.filter(ShareLink.expires_at > datetime.utcnow())
         if link.max_uses is not None:
             query = query.filter(func.coalesce(ShareLink.use_count, 0) < link.max_uses)
         claimed = query.update(
@@ -1202,17 +1835,44 @@ def create_app():
             synchronize_session=False,
         )
         db.session.commit()
+
         if claimed != 1:
+            if zip_path:
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+            _record_share_access(link, "denied")
             return render_template("share_unavailable.html"), 410
 
-        # Always download as an opaque attachment: shared files are never rendered
-        # inside the vault's origin, so an uploaded HTML/SVG file cannot run.
-        response = send_file(
-            doc.file_path,
-            mimetype="application/octet-stream",
-            as_attachment=True,
-            download_name=doc.original_filename or "shared-file",
-        )
+        _record_share_access(link, "downloaded")
+
+        if zip_path:
+            @after_this_request
+            def _remove_bundle(response):
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+                return response
+
+            folder_name = secure_filename(link.folder or "shared-folder") or "shared-folder"
+            response = send_file(
+                zip_path,
+                mimetype="application/zip",
+                as_attachment=True,
+                download_name=f"{folder_name}-secure-vault.zip",
+            )
+        else:
+            doc = docs[0]
+            response = send_file(
+                doc.file_path,
+                mimetype="application/octet-stream",
+                as_attachment=True,
+                download_name=doc.original_filename or "shared-file",
+            )
+
+        # Shared files are never rendered inside the vault's origin.
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -1557,8 +2217,22 @@ def create_app():
         upload_folder = app.config['UPLOAD_FOLDER']
 
         # Fixed deletion order: share links -> documents/files -> notes -> avatar -> account.
-        # 1) Share links
-        ShareLink.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+        # 1) Share links (and their items/access rows; bulk deletes bypass ORM cascade)
+        share_ids = [
+            row.id for row in ShareLink.query.filter_by(user_id=user_id).all()
+        ]
+        if share_ids:
+            ShareAccess.query.filter(ShareAccess.share_id.in_(share_ids)).delete(
+                synchronize_session=False
+            )
+            ShareLinkItem.query.filter(ShareLinkItem.share_id.in_(share_ids)).delete(
+                synchronize_session=False
+            )
+            ShareLink.query.filter(ShareLink.id.in_(share_ids)).delete(
+                synchronize_session=False
+            )
+        Contact.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+        VoiceContext.query.filter_by(user_id=user_id).delete(synchronize_session=False)
 
         # 2) Documents and the files they point at (live uploads and trash copies)
         for doc in Document.query.filter_by(user_id=user_id).all():

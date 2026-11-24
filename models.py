@@ -22,6 +22,11 @@ class User(UserMixin, db.Model):
 
     notes = db.relationship('Note', backref='author', lazy=True, cascade='all, delete-orphan')
     documents = db.relationship('Document', backref='author', lazy=True, cascade='all, delete-orphan')
+    contacts = db.relationship('Contact', backref='owner', lazy=True, cascade='all, delete-orphan')
+    voice_context = db.relationship(
+        'VoiceContext', backref='owner', uselist=False,
+        lazy=True, cascade='all, delete-orphan'
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -61,8 +66,21 @@ class Note(db.Model):
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
 
+class Contact(db.Model):
+    """A saved recipient. Shares are addressed by contact id, never a dictated email."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    email = db.Column(db.String(150), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'email', name='uq_contact_user_email'),
+    )
+
+
 class ShareLink(db.Model):
-    """Expiring public link to one document.
+    """Expiring public link to one document or a frozen folder bundle.
 
     ``token`` stores a SHA-256 hash of the secret token that appears in the URL.
     The plaintext token is only ever returned once, at creation time, so a
@@ -77,6 +95,69 @@ class ShareLink(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=True)
 
+    # Protected / revocable share links
+    password_hash = db.Column(db.String(255), nullable=True)  # optional access gate
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    share_kind = db.Column(db.String(20), nullable=True)  # 'document' or 'folder'
+    folder = db.Column(db.String(50), nullable=True)  # folder label for bundles
+
+    # Recipient snapshot: a later contact edit/delete must not change a sent link.
+    recipient_contact_id = db.Column(
+        db.Integer, db.ForeignKey('contact.id'), nullable=True
+    )
+    recipient_name = db.Column(db.String(150), nullable=True)
+    recipient_email = db.Column(db.String(150), nullable=True)
+
+    items = db.relationship(
+        'ShareLinkItem', backref='share', lazy=True, cascade='all, delete-orphan'
+    )
+    accesses = db.relationship(
+        'ShareAccess', backref='share', lazy=True, cascade='all, delete-orphan'
+    )
+
+
+class ShareLinkItem(db.Model):
+    """A live document snapshotted into a folder share at creation time."""
+    id = db.Column(db.Integer, primary_key=True)
+    share_id = db.Column(db.Integer, db.ForeignKey('share_link.id'), nullable=False)
+    document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('share_id', 'document_id', name='uq_share_item'),
+    )
+
+
+class ShareAccess(db.Model):
+    """One open, password attempt or download against a share link."""
+    id = db.Column(db.Integer, primary_key=True)
+    share_id = db.Column(db.Integer, db.ForeignKey('share_link.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    ip_address = db.Column(db.String(45))
+    user_agent = db.Column(db.String(255))
+    outcome = db.Column(db.String(30))  # opened / granted / password_failed / ...
+
+
+class VoiceContext(db.Model):
+    """Short-lived server-side state for the tap-to-talk assistant.
+
+    No audio or full transcript is stored here. ``context_json`` keeps only
+    small references (for example the last document IDs) so follow-up commands
+    such as "open that file" can be resolved safely. Pending mutations are
+    encrypted and bound to this owner until they are confirmed or expire.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, unique=True)
+    context_json = db.Column(db.Text, nullable=True)
+    pending_action = db.Column(db.Text, nullable=True)  # encrypted JSON, never raw note text
+    pending_nonce = db.Column(db.String(64), nullable=True)
+    pending_summary = db.Column(db.String(255), nullable=True)
+    pending_expires_at = db.Column(db.DateTime, nullable=True)
+    window_started_at = db.Column(db.DateTime, nullable=True)
+    command_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class SecurityLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -87,3 +168,6 @@ class SecurityLog(db.Model):
     status = db.Column(db.String(20))       # 'SUCCESS' or 'FAILED'
     user_agent = db.Column(db.String(255))
     alert_sent = db.Column(db.Boolean, default=False)
+    # Voice / sharing audit. Nullable so existing rows stay valid.
+    tool = db.Column(db.String(60), nullable=True)
+    outcome = db.Column(db.String(30), nullable=True)

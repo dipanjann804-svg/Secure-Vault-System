@@ -17,6 +17,8 @@
     --bg:#202025;
     --surface:#282830;
     --surface-soft:#303038;
+    --danger:#f87171;
+    --danger-bg:#3a1f20;
   }
   html[data-theme="light"]{
     --purple:#5B3FE0;
@@ -27,6 +29,8 @@
     --bg:#ffffff;
     --surface:#ffffff;
     --surface-soft:#F7F6FC;
+    --danger:#b91c1c;
+    --danger-bg:#FEF2F2;
   }
   *{box-sizing:border-box;}
   body{
@@ -138,13 +142,16 @@
     justify-content:center;
     gap:8px;
     width:100%;
+    font-family:inherit;
     font-size:14.5px;
     font-weight:700;
     color:#fff;
     background:var(--purple);
+    border:0;
     border-radius:14px;
     padding:14px 18px;
     text-decoration:none;
+    cursor:pointer;
     transition:filter .15s ease;
   }
   .download-btn:hover{filter:brightness(1.08);}
@@ -153,6 +160,39 @@
     line-height:1.5;
     color:var(--muted);
     margin:16px 0 0;
+  }
+  .field-group{
+    text-align:left;
+    margin:18px 0;
+  }
+  .field-group label{
+    display:block;
+    font-size:12.5px;
+    font-weight:600;
+    margin-bottom:7px;
+    color:var(--ink);
+  }
+  .field-group input{
+    width:100%;
+    font-family:inherit;
+    font-size:14px;
+    color:var(--ink);
+    background:var(--surface-soft);
+    border:1.5px solid var(--border);
+    border-radius:12px;
+    padding:12px 14px;
+    outline:none;
+  }
+  .field-group input:focus{border-color:var(--purple);}
+  .error{
+    font-size:12.5px;
+    color:var(--danger);
+    background:var(--danger-bg);
+    border:1px solid var(--danger);
+    border-radius:10px;
+    padding:10px 12px;
+    margin:0 0 16px;
+    text-align:left;
   }
   footer{
     margin-top:26px;
@@ -172,14 +212,39 @@
   </div>
 
   <div class="share-card">
-    {% set ext = (doc.original_filename or '').lower().rsplit('.', 1)[-1] %}
-    <div class="file-icon">{% if ext in ['png','jpg','jpeg','gif','webp'] %}🖼️{% elif ext == 'pdf' %}📄{% else %}📎{% endif %}</div>
-    <p class="eyebrow">Shared file</p>
-    <h1>{{ doc.original_filename }}</h1>
-    <p class="meta">{{ size_label }} · {% if single_use %}Single-use link{% else %}Multiple downloads{% endif %}</p>
-    <span class="expiry">Expires in {{ expires_in }}</span>
-    <a class="download-btn" href="{{ url_for('shared_file_download', token=token) }}">⬇ Download file</a>
-    <p class="note">Only download this file if you trust the person who sent you this link.</p>
+    {% if needs_password %}
+      <div class="file-icon">🔐</div>
+      <p class="eyebrow">Protected share link</p>
+      <h1>Enter the password</h1>
+      <p class="meta">The sender set a password for this link. Ask them for it separately.</p>
+      {% if password_error %}
+        <div class="error" role="alert">{{ password_error }}</div>
+      {% endif %}
+      <form method="POST" action="{{ url_for('shared_file', token=token) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field-group">
+          <label for="sharePassword">Link password</label>
+          <input type="password" id="sharePassword" name="password" autocomplete="off" required autofocus>
+        </div>
+        <button type="submit" class="download-btn">Unlock link</button>
+      </form>
+      <p class="note">This password is separate from your Secure Vault account password.</p>
+    {% else %}
+      {% set ext = (label or '').lower().rsplit('.', 1)[-1] if share_kind == 'document' else '' %}
+      <div class="file-icon">{% if share_kind == 'folder' %}📁{% elif ext in ['png','jpg','jpeg','gif','webp'] %}🖼️{% elif ext == 'pdf' %}📄{% else %}📎{% endif %}</div>
+      <p class="eyebrow">{% if share_kind == 'folder' %}Shared folder{% else %}Shared file{% endif %}</p>
+      <h1>{{ label }}</h1>
+      <p class="meta">
+        {% if share_kind == 'folder' %}{{ file_count }} file{% if file_count != 1 %}s{% endif %} · {% endif %}
+        {{ size_label }} · {% if single_use %}Single-use link{% else %}Multiple downloads{% endif %}
+      </p>
+      <span class="expiry">Expires in {{ expires_in }}</span>
+      <form method="POST" action="{{ url_for('shared_file_download', token=token) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="download-btn">⬇ {% if share_kind == 'folder' %}Download bundle (.zip){% else %}Download file{% endif %}</button>
+      </form>
+      <p class="note">Only download this file if you trust the person who sent you this link.</p>
+    {% endif %}
   </div>
 
   <footer>Shared securely with Secure Vault</footer>
