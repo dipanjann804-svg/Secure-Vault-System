@@ -809,13 +809,16 @@ def create_app():
         return ip or '127.0.0.1'
 
     def get_base_url():
+        if os.environ.get('RENDER_EXTERNAL_URL'):
+            return os.environ.get('RENDER_EXTERNAL_URL').strip().rstrip('/')
+
         configured_url = os.environ.get('APP_URL') or os.environ.get('BASE_URL')
-        if configured_url:
+        if configured_url and not (os.environ.get('RENDER') and ('192.168.' in configured_url or '10.' in configured_url or 'localhost' in configured_url or '127.0.0.1' in configured_url)):
             return configured_url.strip().rstrip('/')
 
         scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
         host = request.headers.get('X-Forwarded-Host', request.host)
-        if '127.0.0.1' in host or 'localhost' in host:
+        if ('127.0.0.1' in host or 'localhost' in host) and not os.environ.get('RENDER'):
             local_ip = get_local_ip()
             port = host.split(':')[-1] if ':' in host else '5555'
             return f"{scheme}://{local_ip}:{port}"
@@ -851,11 +854,14 @@ def create_app():
                         return redirect(url_for("login"))
                     else:
                         print(f"[!] Email dispatch failed for {user.email}: {result.message}")
-                        flash(
-                            f"Email delivery error: {result.message}",
-                            "error"
+                        return render_template(
+                            "forgot_password.html",
+                            errors=errors,
+                            reset_url=reset_link,
+                            delivery_failed=True,
+                            delivery_error=result.message,
+                            submitted_email=user.email,
                         )
-                        return redirect(url_for("forgot_password"))
                 else:
                     print(f"[!] Password reset requested but email NOT found in database: {email}. Note: If using SQLite on Render Free tier, restarting/sleeping the instance wipes local databases.")
                     flash(
@@ -1623,8 +1629,87 @@ def get_local_ip_address():
 
 app = create_app()
 
+
+def _port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _free_port(port):
+    if not _port_in_use(port):
+        return True
+
+    current_pid = os.getpid()
+    pids_to_kill = set()
+
+    try:
+        out = subprocess.check_output('netstat -ano -p tcp', shell=True, text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 5 and parts[0].upper() == 'TCP' and parts[3].upper() == 'LISTENING':
+                if parts[1].endswith(f':{port}'):
+                    try:
+                        p = int(parts[4])
+                        if p > 0 and p != current_pid:
+                            pids_to_kill.add(p)
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+
+    if not pids_to_kill:
+        try:
+            ps_cmd = f"powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess\""
+            out = subprocess.check_output(ps_cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+            for line in out.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    p = int(line)
+                    if p > 0 and p != current_pid:
+                        pids_to_kill.add(p)
+        except Exception:
+            pass
+
+    for pid in pids_to_kill:
+        print(f"  [*] Port {port} is occupied by stale process (PID {pid}). Terminating it...", flush=True)
+        try:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)],
+                           capture_output=True, check=False)
+        except Exception:
+            pass
+
+    for _ in range(6):
+        time.sleep(0.3)
+        if not _port_in_use(port):
+            return True
+
+    return not _port_in_use(port)
+
+
+def _ensure_available_port(desired_port):
+    if not _port_in_use(desired_port):
+        return desired_port
+
+    print(f"  [!] Port {desired_port} is already in use. Attempting to free it...", flush=True)
+    if _free_port(desired_port):
+        print(f"  [+] Successfully freed port {desired_port}.", flush=True)
+        return desired_port
+
+    curr_port = desired_port + 1
+    while _port_in_use(curr_port):
+        curr_port += 1
+
+    print(f"  [i] Port {desired_port} could not be freed. Switched to next available port: {curr_port}", flush=True)
+    return curr_port
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5555))
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+        port = _ensure_available_port(port)
+        os.environ['PORT'] = str(port)
+
     local_ip = get_local_ip_address()
 
     print("\n" + "=" * 70, flush=True)
