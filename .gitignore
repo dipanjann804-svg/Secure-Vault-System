@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 venv/
 uploads/
+trash/
 desktop.ini
 *.db
 *.sqlite3
