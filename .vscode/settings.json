@@ -1,5 +1,12 @@
 {
     "liveServer.settings.port": 5501,
     "python.defaultInterpreterPath": "${workspaceFolder}\\venv\\Scripts\\python.exe",
-    "python.terminal.activateEnvironment": true
+    "python.terminal.activateEnvironment": true,
+    "files.associations": {
+        "**/Templates/*.html": "jinja-html",
+        "**/templates/*.html": "jinja-html"
+    },
+    "emmet.includeLanguages": {
+        "jinja-html": "html"
+    }
 }
