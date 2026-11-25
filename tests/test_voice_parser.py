@@ -1,4 +1,8 @@
 """Unit tests for the deterministic command planner (no database, no browser)."""
+import re
+
+import voice_service
+from voice import PREPARE_TOOLS, READ_TOOLS
 from voice_service import (
     TIER_BLOCKED,
     TIER_CONFIRM,
@@ -264,6 +268,44 @@ def test_create_note_extracts_title_and_content():
 
 def test_create_note_without_body_asks_for_one():
     assert parse_voice_command("create a note")["intent"] == "ask_note"
+
+
+def _all_tools():
+    groups = (
+        voice_service._SMALL_TALK_TOOLS,
+        voice_service._COMMAND_TOOLS,
+        voice_service._NAV_TOOLS,
+        voice_service._ANSWER_TOOLS,
+        voice_service._READ_TOOLS,
+        voice_service._FALLBACK_TOOLS,
+    )
+    return [tool for group in groups for tool in group]
+
+
+def test_every_registered_tool_is_well_formed():
+    for tool in _all_tools():
+        assert tool.name and tool.audit and tool.speech, tool
+        assert tool.patterns, tool.name
+        for pattern in tool.patterns:
+            re.compile(pattern)
+
+
+def test_every_tool_name_has_a_handler():
+    # A tool without a handler would silently answer with its generic speech,
+    # so the registry and the handler table must stay in step.
+    names = {tool.name for tool in _all_tools()}
+    handled = set(READ_TOOLS) | set(PREPARE_TOOLS) | {"confirm", "cancel"}
+    assert names <= handled
+
+
+def test_adding_a_phrasing_needs_no_new_tool():
+    # One tool owns many ways to ask; this guards against the registry growing
+    # back into one entry per sentence.
+    search = next(tool for tool in voice_service._READ_TOOLS if tool.name == "search_documents")
+    assert len(search.patterns) >= 1
+    for text in ("find passport", "search for invoice", "look for bills", "do i have a lease"):
+        plan = parse_voice_command(text)
+        assert plan["intent"] == "search_documents", text
 
 
 def test_transcript_is_capped_before_parsing():

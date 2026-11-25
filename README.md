@@ -48,8 +48,8 @@ A Flask web app for storing personal documents and notes securely. Files are org
 Secure-Vault-System/
 ├── app.py               # Flask app factory, all routes, startup (port 5555)
 ├── models.py            # User, Document, Note, Contact, ShareLink, VoiceContext, SecurityLog models
-├── voice.py             # Voice API routes, pending-action state, audit + rate limiting
-├── voice_service.py     # Deterministic English command parser and safety tiers
+├── voice.py             # Voice API routes, tool handlers, pending-action state, audit + rate limiting
+├── voice_service.py     # Tool registry: each tool owns its phrasings and safety tier
 ├── encryption.py        # Fernet encrypt_note / decrypt_note helpers
 ├── email_service.py     # password-reset and share email sender (Resend / Brevo / SMTP)
 ├── config.py            # Config class (SECRET_KEY, DB, mail settings)

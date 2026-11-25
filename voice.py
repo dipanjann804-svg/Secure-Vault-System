@@ -360,292 +360,341 @@ def _summary_payload():
     return _response(speak)
 
 
-def _handle_read(plan, ctx):
-    intent = plan["intent"]
-
-    if intent == "help":
-        return _response(plan["speak"])
-
-    if intent == "vault_summary":
-        return _summary_payload()
-
-    if intent == "list_documents":
-        docs = Document.query.filter_by(
-            user_id=current_user.id, deleted_at=None
-        ).order_by(Document.created_at.desc()).all()
-        _remember_documents(ctx, docs[:10], intent)
-        if not docs:
-            return _response("You do not have any files in your vault yet.")
-        lines = [f"You have {len(docs)} file{'s' if len(docs) != 1 else ''}."]
-        if docs:
-            lines.append("The most recent are: " + "; ".join(_list_line(doc) for doc in docs[:5]) + ".")
-        return _response(" ".join(lines), "\n".join(lines), data={
-            "documents": [
-                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-                for doc in docs[:10]
-            ]
-        })
-
-    if intent == "search_documents":
-        query = plan.get("query") or ""
-        if not query:
-            return _response("What should I search for?")
-        docs = _find_documents(query, ctx)
-        _remember_documents(ctx, docs, intent)
-        if not docs:
-            return _response(f"I couldn't find a file matching {query}.", data={"documents": []})
-        lines = [
-            f"I found {len(docs)} file{'s' if len(docs) != 1 else ''} matching {query}: "
-            + "; ".join(_list_line(doc) for doc in docs[:5]) + "."
-        ]
-        return _response(" ".join(lines), "\n".join(lines), data={
-            "documents": [
-                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-                for doc in docs[:10]
-            ]
-        })
-
-    if intent == "open_document":
-        query = plan.get("document_query") or ""
-        docs = _find_documents(query, ctx)
-        if not docs:
-            if not query:
-                return _response("Which file should I open? Tell me its name first.")
-            # Speech recognition often mangles a name. Offer real filenames
-            # instead of a dead end, so the next try can succeed.
-            suggestions = _suggest_documents(query)
-            if suggestions:
-                return _response(
-                    f"I couldn't find a file matching {query}. Did you mean: "
-                    + "; ".join(suggestions) + "?",
-                    data={"documents": [], "suggestions": suggestions},
-                )
-            recent = _document_names(limit=5)
-            if recent:
-                return _response(
-                    f"I couldn't find a file matching {query}. Your files are: "
-                    + "; ".join(recent) + ". Say the exact name to open one.",
-                    data={"documents": [], "suggestions": recent},
-                )
-            return _response(f"I couldn't find a file matching {query}.")
-        if len(docs) > 1:
-            names = "; ".join(_list_line(doc) for doc in docs[:5])
-            _remember_documents(ctx, docs, intent)
-            return _response(
-                f"I found several matches: {names}. Please say the exact file name.",
-                data={"documents": [
-                    {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-                    for doc in docs
-                ]},
-            )
-        doc = docs[0]
-        _remember_documents(ctx, docs, intent)
-        return _response(
-            f"Opening {doc.original_filename} from {doc.folder}.",
-            client_action={"type": "open_preview", "doc_id": doc.id},
-        )
-
-    if intent == "list_folders":
-        names = _folder_names()
-        if not names:
-            return _response("You do not have any folders yet.")
-        return _response(
-            f"You have {len(names)} folders: " + "; ".join(names) + ".",
-            data={"folders": names},
-        )
-
-    if intent == "open_folder":
-        query = (plan.get("folder_query") or "").strip()
-        names = _folder_names()
-        if not names:
-            return _response("You do not have any folders yet.")
-        if not query:
-            return _response(
-                "Which folder? Your folders are: " + "; ".join(names) + "."
-            )
-        match, names = _match_folder(query, names)
-        if not match:
-            return _response(
-                f"I couldn't find a folder named {query}. Your folders are: "
-                + "; ".join(names) + "."
-            )
-        return _response(
-            f"Opening the {match} folder.",
-            client_action={"type": "navigate", "url": f"/folders/{quote(match, safe='')}"},
-        )
-
-    if intent == "list_notes":
-        notes = Note.query.filter_by(user_id=current_user.id).order_by(
-            Note.created_at.desc()
-        ).all()
-        if not notes:
-            return _response("You do not have any notes yet.")
-        titles = [note.title or "Untitled Note" for note in notes[:5]]
-        return _response(
-            f"You have {len(notes)} note{'s' if len(notes) != 1 else ''}. "
-            "The most recent titles are: " + "; ".join(titles) + ".",
-            data={"notes": [{"id": note.id, "title": note.title or "Untitled Note"} for note in notes[:5]]},
-        )
-
-    if intent == "list_contacts":
-        contacts = Contact.query.filter_by(user_id=current_user.id).order_by(
-            Contact.name.asc()
-        ).all()
-        if not contacts:
-            return _response(
-                "You do not have any saved contacts. Add one in Settings before "
-                "asking me to share."
-            )
-        names = [contact.name for contact in contacts]
-        return _response(
-            "Saved contacts: " + "; ".join(names) + ".",
-            data={"contacts": [{"id": contact.id, "name": contact.name} for contact in contacts]},
-        )
-
-    if intent == "list_folder_contents":
-        query = (plan.get("folder_query") or "").strip()
-        match, names = _match_folder(query)
-        if not names:
-            return _response("You do not have any folders yet.")
-        if not query:
-            return _response("Which folder? Your folders are: " + "; ".join(names) + ".")
-        if not match:
-            return _response(
-                f"I couldn't find a folder named {query}. Your folders are: "
-                + "; ".join(names) + "."
-            )
-        docs = Document.query.filter(
-            Document.user_id == current_user.id,
-            Document.deleted_at.is_(None),
-            func.lower(Document.folder) == match.lower(),
-        ).order_by(Document.created_at.desc()).all()
-        if not docs:
-            return _response(f"The {match} folder is empty.")
-        _remember_documents(ctx, docs, intent)
-        lines = [
-            f"The {match} folder has {len(docs)} file{'s' if len(docs) != 1 else ''}. "
-            "The most recent are: " + "; ".join(_list_line(doc) for doc in docs[:5]) + "."
-        ]
-        return _response(" ".join(lines), "\n".join(lines), data={
-            "documents": [
-                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-                for doc in docs[:10]
-            ],
-            "folder": match,
-        })
-
-    if intent == "document_info":
-        query = plan.get("document_query") or ""
-        docs = _find_documents(query, ctx)
-        if not docs:
-            suggestions = _suggest_documents(query)
-            if suggestions:
-                return _response(
-                    f"I couldn't find a file matching {query}. Did you mean: "
-                    + "; ".join(suggestions) + "?",
-                    data={"documents": [], "suggestions": suggestions},
-                )
-            recent = _document_names(limit=5)
-            if recent:
-                return _response(
-                    f"I couldn't find a file matching {query}. Your files are: "
-                    + "; ".join(recent) + ".",
-                    data={"documents": [], "suggestions": recent},
-                )
-            return _response(f"I couldn't find a file matching {query}.")
-        if len(docs) > 1:
-            _remember_documents(ctx, docs, intent)
-            names = "; ".join(_list_line(doc) for doc in docs[:5])
-            return _response(
-                f"I found several matches: {names}. Which one do you mean?",
-                data={"documents": [
-                    {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-                    for doc in docs
-                ]},
-            )
-        doc = docs[0]
-        _remember_documents(ctx, docs, intent)
-        added = doc.created_at.strftime("%d %B %Y") if doc.created_at else "an unknown date"
-        speak = (
-            f"{doc.original_filename} is in the {doc.folder} folder, "
-            f"{_human_size(doc.file_size)}, added on {added}."
-        )
-        return _response(speak, data={
-            "documents": [
-                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
-            ],
-            "folder": doc.folder,
-            "size": doc.file_size,
-        })
-
-    if intent == "list_shares":
-        links = ShareLink.query.filter(
-            ShareLink.user_id == current_user.id,
-            ShareLink.revoked_at.is_(None),
-            or_(ShareLink.expires_at.is_(None), ShareLink.expires_at > _now()),
-            or_(ShareLink.max_uses.is_(None), ShareLink.use_count < ShareLink.max_uses),
-        ).order_by(ShareLink.created_at.desc()).all()
-        if not links:
-            return _response("You have no active share links.")
-        doc_ids = [link.document_id for link in links if link.document_id]
-        names = {}
-        if doc_ids:
-            rows = Document.query.filter(
-                Document.user_id == current_user.id,
-                Document.id.in_(doc_ids),
-            ).all()
-            names = {doc.id: doc.original_filename for doc in rows}
-        parts = [
-            f"{_share_label(link, names)} for {link.recipient_name or 'a recipient'}, "
-            f"{_share_uses(link)}, {_share_expiry(link)}"
-            for link in links[:5]
-        ]
-        speak = (
-            f"You have {len(links)} active share link{'s' if len(links) != 1 else ''}. "
-            + "; ".join(parts) + "."
-        )
-        return _response(speak, data={
-            "shares": [
-                {
-                    "id": link.id,
-                    "label": _share_label(link, names),
-                    "recipient": link.recipient_name,
-                    "uses": _share_uses(link),
-                    "expiry": _share_expiry(link),
-                }
-                for link in links[:10]
-            ],
-            "active_count": len(links),
-        })
-
-    if intent == "open_trash":
-        return _response(
-            "Opening the trash.",
-            client_action={"type": "open_trash"},
-        )
-
-    if intent == "open_settings":
-        return _response(
-            "Opening settings.",
-            client_action={"type": "open_settings"},
-        )
-
-    if intent == "open_shares":
-        return _response(
-            "Opening your share links.",
-            client_action={"type": "navigate", "url": "/shares"},
-        )
-
-    if intent == "open_dashboard":
-        return _response(
-            "Opening your dashboard.",
-            client_action={"type": "navigate", "url": "/dashboard"},
-        )
-
-    if intent in {"ask_note", "error"}:
-        return _response(plan["speak"])
-
+# ---------------------------------------------------------------------------
+# Read tools. One handler per capability; the planner in voice_service owns
+# every phrasing, so a new capability is one Tool entry there plus one
+# function and one line in READ_TOOLS below.
+# ---------------------------------------------------------------------------
+def _tool_speak(plan, _ctx):
     return _response(plan["speak"])
+
+
+def _tool_vault_summary(_plan, _ctx):
+    return _summary_payload()
+
+
+def _tool_list_documents(plan, ctx):
+    intent = plan["intent"]
+    docs = Document.query.filter_by(
+        user_id=current_user.id, deleted_at=None
+    ).order_by(Document.created_at.desc()).all()
+    _remember_documents(ctx, docs[:10], intent)
+    if not docs:
+        return _response("You do not have any files in your vault yet.")
+    lines = [f"You have {len(docs)} file{'s' if len(docs) != 1 else ''}."]
+    if docs:
+        lines.append("The most recent are: " + "; ".join(_list_line(doc) for doc in docs[:5]) + ".")
+    return _response(" ".join(lines), "\n".join(lines), data={
+        "documents": [
+            {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+            for doc in docs[:10]
+        ]
+    })
+
+
+def _tool_search_documents(plan, ctx):
+    intent = plan["intent"]
+    query = plan.get("query") or ""
+    if not query:
+        return _response("What should I search for?")
+    docs = _find_documents(query, ctx)
+    _remember_documents(ctx, docs, intent)
+    if not docs:
+        return _response(f"I couldn't find a file matching {query}.", data={"documents": []})
+    lines = [
+        f"I found {len(docs)} file{'s' if len(docs) != 1 else ''} matching {query}: "
+        + "; ".join(_list_line(doc) for doc in docs[:5]) + "."
+    ]
+    return _response(" ".join(lines), "\n".join(lines), data={
+        "documents": [
+            {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+            for doc in docs[:10]
+        ]
+    })
+
+
+def _tool_open_document(plan, ctx):
+    intent = plan["intent"]
+    query = plan.get("document_query") or ""
+    docs = _find_documents(query, ctx)
+    if not docs:
+        if not query:
+            return _response("Which file should I open? Tell me its name first.")
+        # Speech recognition often mangles a name. Offer real filenames
+        # instead of a dead end, so the next try can succeed.
+        suggestions = _suggest_documents(query)
+        if suggestions:
+            return _response(
+                f"I couldn't find a file matching {query}. Did you mean: "
+                + "; ".join(suggestions) + "?",
+                data={"documents": [], "suggestions": suggestions},
+            )
+        recent = _document_names(limit=5)
+        if recent:
+            return _response(
+                f"I couldn't find a file matching {query}. Your files are: "
+                + "; ".join(recent) + ". Say the exact name to open one.",
+                data={"documents": [], "suggestions": recent},
+            )
+        return _response(f"I couldn't find a file matching {query}.")
+    if len(docs) > 1:
+        names = "; ".join(_list_line(doc) for doc in docs[:5])
+        _remember_documents(ctx, docs, intent)
+        return _response(
+            f"I found several matches: {names}. Please say the exact file name.",
+            data={"documents": [
+                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+                for doc in docs
+            ]},
+        )
+    doc = docs[0]
+    _remember_documents(ctx, docs, intent)
+    return _response(
+        f"Opening {doc.original_filename} from {doc.folder}.",
+        client_action={"type": "open_preview", "doc_id": doc.id},
+    )
+
+
+def _tool_list_folders(_plan, _ctx):
+    names = _folder_names()
+    if not names:
+        return _response("You do not have any folders yet.")
+    return _response(
+        f"You have {len(names)} folders: " + "; ".join(names) + ".",
+        data={"folders": names},
+    )
+
+
+def _tool_open_folder(plan, _ctx):
+    query = (plan.get("folder_query") or "").strip()
+    names = _folder_names()
+    if not names:
+        return _response("You do not have any folders yet.")
+    if not query:
+        return _response(
+            "Which folder? Your folders are: " + "; ".join(names) + "."
+        )
+    match, names = _match_folder(query, names)
+    if not match:
+        return _response(
+            f"I couldn't find a folder named {query}. Your folders are: "
+            + "; ".join(names) + "."
+        )
+    return _response(
+        f"Opening the {match} folder.",
+        client_action={"type": "navigate", "url": f"/folders/{quote(match, safe='')}"},
+    )
+
+
+def _tool_list_notes(_plan, _ctx):
+    notes = Note.query.filter_by(user_id=current_user.id).order_by(
+        Note.created_at.desc()
+    ).all()
+    if not notes:
+        return _response("You do not have any notes yet.")
+    titles = [note.title or "Untitled Note" for note in notes[:5]]
+    return _response(
+        f"You have {len(notes)} note{'s' if len(notes) != 1 else ''}. "
+        "The most recent titles are: " + "; ".join(titles) + ".",
+        data={"notes": [{"id": note.id, "title": note.title or "Untitled Note"} for note in notes[:5]]},
+    )
+
+
+def _tool_list_contacts(_plan, _ctx):
+    contacts = Contact.query.filter_by(user_id=current_user.id).order_by(
+        Contact.name.asc()
+    ).all()
+    if not contacts:
+        return _response(
+            "You do not have any saved contacts. Add one in Settings before "
+            "asking me to share."
+        )
+    names = [contact.name for contact in contacts]
+    return _response(
+        "Saved contacts: " + "; ".join(names) + ".",
+        data={"contacts": [{"id": contact.id, "name": contact.name} for contact in contacts]},
+    )
+
+
+def _tool_list_folder_contents(plan, ctx):
+    intent = plan["intent"]
+    query = (plan.get("folder_query") or "").strip()
+    match, names = _match_folder(query)
+    if not names:
+        return _response("You do not have any folders yet.")
+    if not query:
+        return _response("Which folder? Your folders are: " + "; ".join(names) + ".")
+    if not match:
+        return _response(
+            f"I couldn't find a folder named {query}. Your folders are: "
+            + "; ".join(names) + "."
+        )
+    docs = Document.query.filter(
+        Document.user_id == current_user.id,
+        Document.deleted_at.is_(None),
+        func.lower(Document.folder) == match.lower(),
+    ).order_by(Document.created_at.desc()).all()
+    if not docs:
+        return _response(f"The {match} folder is empty.")
+    _remember_documents(ctx, docs, intent)
+    lines = [
+        f"The {match} folder has {len(docs)} file{'s' if len(docs) != 1 else ''}. "
+        "The most recent are: " + "; ".join(_list_line(doc) for doc in docs[:5]) + "."
+    ]
+    return _response(" ".join(lines), "\n".join(lines), data={
+        "documents": [
+            {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+            for doc in docs[:10]
+        ],
+        "folder": match,
+    })
+
+
+def _tool_document_info(plan, ctx):
+    intent = plan["intent"]
+    query = plan.get("document_query") or ""
+    docs = _find_documents(query, ctx)
+    if not docs:
+        suggestions = _suggest_documents(query)
+        if suggestions:
+            return _response(
+                f"I couldn't find a file matching {query}. Did you mean: "
+                + "; ".join(suggestions) + "?",
+                data={"documents": [], "suggestions": suggestions},
+            )
+        recent = _document_names(limit=5)
+        if recent:
+            return _response(
+                f"I couldn't find a file matching {query}. Your files are: "
+                + "; ".join(recent) + ".",
+                data={"documents": [], "suggestions": recent},
+            )
+        return _response(f"I couldn't find a file matching {query}.")
+    if len(docs) > 1:
+        _remember_documents(ctx, docs, intent)
+        names = "; ".join(_list_line(doc) for doc in docs[:5])
+        return _response(
+            f"I found several matches: {names}. Which one do you mean?",
+            data={"documents": [
+                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+                for doc in docs
+            ]},
+        )
+    doc = docs[0]
+    _remember_documents(ctx, docs, intent)
+    added = doc.created_at.strftime("%d %B %Y") if doc.created_at else "an unknown date"
+    speak = (
+        f"{doc.original_filename} is in the {doc.folder} folder, "
+        f"{_human_size(doc.file_size)}, added on {added}."
+    )
+    return _response(speak, data={
+        "documents": [
+            {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+        ],
+        "folder": doc.folder,
+        "size": doc.file_size,
+    })
+
+
+def _tool_list_shares(_plan, _ctx):
+    links = ShareLink.query.filter(
+        ShareLink.user_id == current_user.id,
+        ShareLink.revoked_at.is_(None),
+        or_(ShareLink.expires_at.is_(None), ShareLink.expires_at > _now()),
+        or_(ShareLink.max_uses.is_(None), ShareLink.use_count < ShareLink.max_uses),
+    ).order_by(ShareLink.created_at.desc()).all()
+    if not links:
+        return _response("You have no active share links.")
+    doc_ids = [link.document_id for link in links if link.document_id]
+    names = {}
+    if doc_ids:
+        rows = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.id.in_(doc_ids),
+        ).all()
+        names = {doc.id: doc.original_filename for doc in rows}
+    parts = [
+        f"{_share_label(link, names)} for {link.recipient_name or 'a recipient'}, "
+        f"{_share_uses(link)}, {_share_expiry(link)}"
+        for link in links[:5]
+    ]
+    speak = (
+        f"You have {len(links)} active share link{'s' if len(links) != 1 else ''}. "
+        + "; ".join(parts) + "."
+    )
+    return _response(speak, data={
+        "shares": [
+            {
+                "id": link.id,
+                "label": _share_label(link, names),
+                "recipient": link.recipient_name,
+                "uses": _share_uses(link),
+                "expiry": _share_expiry(link),
+            }
+            for link in links[:10]
+        ],
+        "active_count": len(links),
+    })
+
+
+def _tool_open_trash(_plan, _ctx):
+    return _response(
+        "Opening the trash.",
+        client_action={"type": "open_trash"},
+    )
+
+
+def _tool_open_settings(_plan, _ctx):
+    return _response(
+        "Opening settings.",
+        client_action={"type": "open_settings"},
+    )
+
+
+def _tool_open_shares(_plan, _ctx):
+    return _response(
+        "Opening your share links.",
+        client_action={"type": "navigate", "url": "/shares"},
+    )
+
+
+def _tool_open_dashboard(_plan, _ctx):
+    return _response(
+        "Opening your dashboard.",
+        client_action={"type": "navigate", "url": "/dashboard"},
+    )
+
+
+READ_TOOLS = {
+    "help": _tool_speak,
+    "vault_summary": _tool_vault_summary,
+    "list_documents": _tool_list_documents,
+    "search_documents": _tool_search_documents,
+    "open_document": _tool_open_document,
+    "list_folders": _tool_list_folders,
+    "open_folder": _tool_open_folder,
+    "list_notes": _tool_list_notes,
+    "list_contacts": _tool_list_contacts,
+    "list_folder_contents": _tool_list_folder_contents,
+    "document_info": _tool_document_info,
+    "list_shares": _tool_list_shares,
+    "open_trash": _tool_open_trash,
+    "open_settings": _tool_open_settings,
+    "open_shares": _tool_open_shares,
+    "open_dashboard": _tool_open_dashboard,
+    "faq": _tool_speak,
+    "small_talk": _tool_speak,
+    "ask_note": _tool_speak,
+    "error": _tool_speak,
+}
+
+
+def _handle_read(plan, ctx):
+    """Dispatch a read plan to the tool that answers it."""
+    handler = READ_TOOLS.get(plan["intent"])
+    if handler is None:
+        return _response(plan["speak"])
+    return handler(plan, ctx)
 
 
 def _prepare_note(plan, ctx):
@@ -735,7 +784,15 @@ def _prepare_share(plan, ctx):
     )
 
 
-def _execute_note(action):
+# Tools that prepare a pending action. The route asks this registry, so a new
+# mutating capability is one function here plus one entry.
+PREPARE_TOOLS = {
+    "create_note": _prepare_note,
+    "share_document": _prepare_share,
+}
+
+
+def _execute_note(action, _share_creator=None):
     title = str(action.get("title") or "").strip()
     content = str(action.get("content") or "")
     if not title:
@@ -826,17 +883,21 @@ def _execute_share(action, share_creator):
     )
 
 
+EXECUTE_TOOLS = {
+    "create_note": _execute_note,
+    "create_share": _execute_share,
+}
+
+
 def _confirm_action(nonce, share_creator):
     action, error = _claim_pending(nonce)
     if error:
         _audit("voice_confirm", "rejected", "FAILED")
         db.session.commit()
         return _response(error, status="error")
-    kind = (action or {}).get("kind")
-    if kind == "create_note":
-        return _execute_note(action)
-    if kind == "create_share":
-        return _execute_share(action, share_creator)
+    handler = EXECUTE_TOOLS.get((action or {}).get("kind"))
+    if handler is not None:
+        return handler(action, share_creator)
     _audit("voice_confirm", "unknown_action", "FAILED")
     db.session.commit()
     return _response("I didn't recognize the pending action, so nothing was changed.", status="error")
@@ -927,13 +988,9 @@ def create_voice_blueprint(share_creator):
             db.session.commit()
             return jsonify(_response(plan["speak"], status="ok", intent=intent))
 
-        if intent == "create_note":
-            result = _prepare_note(plan, ctx)
-            db.session.commit()
-            return jsonify(result)
-
-        if intent == "share_document":
-            result = _prepare_share(plan, ctx)
+        prepare = PREPARE_TOOLS.get(intent)
+        if prepare is not None:
+            result = prepare(plan, ctx)
             db.session.commit()
             return jsonify(result)
 
