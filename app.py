@@ -788,8 +788,9 @@ def create_app():
         print("  To persist data permanently, attach a PostgreSQL database and set DATABASE_URL.", flush=True)
         print("=" * 70 + "\n", flush=True)
     
-    # Uploads configuration
-    upload_folder = os.path.join(app.root_path, 'uploads')
+    # Uploads configuration. UPLOAD_FOLDER can point outside the app directory
+    # (tests, ephemeral hosts) without changing the default behaviour.
+    upload_folder = os.environ.get('UPLOAD_FOLDER') or os.path.join(app.root_path, 'uploads')
     os.makedirs(upload_folder, exist_ok=True)
     app.config['UPLOAD_FOLDER'] = upload_folder
     # Trashed files are kept compressed here for 30 days before cleanup.
@@ -804,6 +805,20 @@ def create_app():
     db.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = "login"
+
+    # The voice panel talks JSON. An expired session must not answer with an
+    # HTML login redirect, so those paths get a 401 the panel can display.
+    # Every other route keeps Flask-Login's default redirect behaviour.
+    @login_manager.unauthorized_handler
+    def _unauthorized():
+        if request.path.startswith('/voice') or request.is_json:
+            return jsonify({
+                "status": "error",
+                "message": "Your session expired. Refresh the page and sign in again.",
+            }), 401
+        flash("Please log in to access this page.", "error")
+        return redirect(url_for(login_manager.login_view))
+
     # CSRF is required on every POST, including JSON fetches (X-CSRFToken).
     app.config['WTF_CSRF_TIME_LIMIT'] = 3600
     csrf.init_app(app)
@@ -1405,8 +1420,8 @@ def create_app():
         return response
 
     # --- Public share links ---
-    def _create_share_record(docs, kind, folder, options):
-        """Create a share row, freeze a folder bundle, and email a saved contact."""
+    def _create_share_record(docs, kind, folder, options, send_email=True):
+        """Create a share row, freeze a folder bundle, and optionally email a contact."""
         token = secrets.token_urlsafe(32)  # 256 bits; only the hash is stored
         contact = options["contact"]
         link = ShareLink(
@@ -1439,7 +1454,7 @@ def create_app():
         share_url = url_for("shared_file", token=token, _external=True)
         email_sent = False
         email_message = ""
-        if contact:
+        if contact and send_email:
             result = send_share_email(
                 to_email=contact.email,
                 recipient_name=contact.name,
@@ -1497,7 +1512,7 @@ def create_app():
 
         try:
             link, token, email_sent, email_message = _create_share_record(
-                [doc], SHARE_KIND_DOCUMENT, None, options
+                [doc], SHARE_KIND_DOCUMENT, None, options, send_email=False
             )
         except Exception:
             db.session.rollback()
@@ -1512,6 +1527,7 @@ def create_app():
             "url": url_for("shared_file", token=token, _external=True),
             "recipient": contact.name,
             "email_sent": email_sent,
+            "email_skipped": True,
             "email_message": email_message,
             "expires_in": _share_time_left(link.expires_at),
             "usage": options["usage"],
