@@ -773,11 +773,16 @@ def create_app():
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-vault-123')
     app.config['TEMPLATES_AUTO_RELOAD'] = True
     app.jinja_env.auto_reload = True
-    db_uri = os.environ.get('DATABASE_URL')
-    if db_uri and db_uri.startswith("postgres://"):
+    db_uri = (os.environ.get('DATABASE_URL') or '').strip().strip('"').strip("'")
+    if db_uri.startswith("postgres://"):
         db_uri = db_uri.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = db_uri or "sqlite:///app.db"
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    if not app.config['SQLALCHEMY_DATABASE_URI'].startswith("sqlite:"):
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            "pool_pre_ping": True,
+            "pool_recycle": 300,
+        }
 
     if os.environ.get("RENDER") and not db_uri:
         print("\n" + "=" * 70, flush=True)
@@ -866,7 +871,10 @@ def create_app():
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.query.get(int(user_id))
+        try:
+            return db.session.get(User, int(user_id))
+        except (TypeError, ValueError):
+            return None
 
     # --- Health Route ---
     @app.route("/health/db")
@@ -2395,7 +2403,8 @@ def _ensure_available_port(desired_port):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5555))
+    _raw_port = (os.environ.get("PORT") or "").strip()
+    port = int(_raw_port) if _raw_port.isdigit() else 5555
     if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         port = _ensure_available_port(port)
         os.environ['PORT'] = str(port)
