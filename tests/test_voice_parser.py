@@ -60,6 +60,29 @@ def test_open_folder_extracts_name():
     assert plan["folder_query"] == "Finance"
 
 
+def test_polite_phrasing_still_opens_the_named_file():
+    for text in (
+        "Can you please open my file named passport.pdf?",
+        "I want you to open my passport.pdf file. Do it.",
+        "Hey, could you please open passport.pdf",
+        "open my file name passport.pdf",
+    ):
+        plan = parse_voice_command(text)
+        assert plan["intent"] == "open_document", text
+        assert plan["document_query"] == "passport.pdf", text
+
+
+def test_open_my_folder_asks_which_folder():
+    plan = parse_voice_command("Can you open my folder please")
+    assert plan["intent"] == "open_folder"
+    assert plan["folder_query"] == ""
+
+
+def test_polite_confirmation_still_confirms():
+    assert parse_voice_command("OK, do it")["intent"] == "confirm"
+    assert parse_voice_command("yes please")["intent"] == "confirm"
+
+
 def test_open_trash_is_allowed_but_delete_is_blocked():
     assert parse_voice_command("show the trash")["intent"] == "open_trash"
     blocked = parse_voice_command("empty the trash")

@@ -28,6 +28,25 @@ _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
 _EXPIRY_LABELS = {"10m": "10 minutes", "1h": "1 hour", "24h": "24 hours"}
 _USAGE_LABELS = {"once": "one-time", "multi": "multiple-use"}
 
+# People rarely dictate a bare command. Strip the polite padding around it so
+# "can you please open my passport" reaches the same planner as "open passport".
+_LEAD_IN_PATTERNS = (
+    r"^(?:hey|hi|hello|ok|okay|so|um|uh|er|now|alright|buffy)\b[\s,]*",
+    r"^please\b[\s,]*",
+    r"^(?:can|could|would|will)\s+you(?:\s+please)?\b[\s,]*",
+    r"^i\s*(?:'d|would)\s+like\s+(?:you\s+)?to\b[\s,]*",
+    r"^i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\b[\s,]*",
+)
+_TRAILING_NOISE_RE = re.compile(
+    r"(?:[\s,.!?]+(?:please|now|right now|do it|go ahead|thanks|thank you|"
+    r"for me|ok|okay))+[\s.!?]*$",
+    re.I,
+)
+_FILE_PREFIX_RE = re.compile(
+    r"^(?:file|document|doc|pdf|image)\s+(?:named|called|titled|name)\s+", re.I
+)
+_ARTICLE_RE = re.compile(r"^(?:my|the|a|an|this|that)\s+", re.I)
+
 
 def normalize_transcript(text: str) -> str:
     """Trim, collapse whitespace, and cap the text before parsing."""
@@ -44,6 +63,43 @@ def _is_context_reference(value: str) -> bool:
     value = re.sub(r"^(?:the|that|this|my|a|an|some)\s+", "", value)
     value = re.sub(r"^(?:last|latest|most recent|previous)\s+", "", value)
     return value in {"", "it", "that", "this", "file", "document", "one"}
+
+
+_NOTE_BODY_RE = re.compile(
+    r"\b(?:with\s+(?:the\s+)?content|saying|that\s+says|containing|content)\b", re.I
+)
+
+
+def _strip_lead_ins(text: str) -> str:
+    """Remove conversational openers and trailing padding around a command."""
+    for _ in range(5):
+        before = text
+        for pattern in _LEAD_IN_PATTERNS:
+            text = re.sub(pattern, "", text, count=1, flags=re.I)
+        text = text.strip()
+        if text == before:
+            break
+    # Never trim a dictated note body: a note may legitimately end in a word
+    # like "thanks".
+    if not _NOTE_BODY_RE.search(text):
+        text = _clean_query(text)
+    return text
+
+
+def _clean_query(value: str) -> str:
+    """Trim a spoken name: punctuation, trailing "please/do it", articles."""
+    value = _clean_slot(value)
+    value = _TRAILING_NOISE_RE.sub("", value)
+    value = _clean_slot(value)
+    return value
+
+
+def _folder_slot(value: str) -> str:
+    """A folder name from speech; "my" or "the" means the user named none."""
+    value = _clean_query(value)
+    if value.lower() in {"", "my", "the", "a", "an", "this", "that", "some"}:
+        return ""
+    return "" if _is_context_reference(value) else value
 
 
 def _plan(intent, tier, audit_tool, speak, **extra):
@@ -138,6 +194,16 @@ def parse_voice_command(text: str):
             "to share with their saved contact name.",
             "dictated_email",
         )
+
+    # Tolerate polite or indirect phrasing ("Can you please open ...",
+    # "I want you to open ...") before matching any intent.
+    original = _strip_lead_ins(original)
+    if not original:
+        return _plan(
+            "unknown", TIER_READ, "voice_unknown",
+            "I didn't catch a command I know. Say help to hear what I can do.",
+        )
+    low = original.lower()
 
     # Confirmation and cancellation are handled only when a server-side
     # pending action exists. The route layer enforces that.
@@ -272,7 +338,7 @@ def parse_voice_command(text: str):
         return _plan(
             "open_folder", TIER_READ, "voice_open_folder",
             "Opening that folder.",
-            folder_query=_clean_slot(folder_match.group(1)),
+            folder_query=_folder_slot(folder_match.group(1)),
         )
     folder_match = re.match(
         r"^(?:please\s+)?(?:open|go to)\s+(?:the\s+)?(.+?)\s+folder$",
@@ -282,7 +348,7 @@ def parse_voice_command(text: str):
         return _plan(
             "open_folder", TIER_READ, "voice_open_folder",
             "Opening that folder.",
-            folder_query=_clean_slot(folder_match.group(1)),
+            folder_query=_folder_slot(folder_match.group(1)),
         )
 
     # Search
@@ -291,9 +357,9 @@ def parse_voice_command(text: str):
         original, re.I,
     )
     if search_match:
-        query = _clean_slot(search_match.group(1))
+        query = _clean_query(search_match.group(1))
         query = re.sub(r"\s+(?:in my vault|for me|please)$", "", query, flags=re.I)
-        query = re.sub(r"^(?:my|the|a|an)\s+", "", query, flags=re.I)
+        query = _ARTICLE_RE.sub("", query)
         return _plan(
             "search_documents", TIER_READ, "voice_search_documents",
             "Searching your files.",
@@ -398,11 +464,15 @@ def parse_voice_command(text: str):
         original, re.I,
     )
     if open_match:
-        query = _clean_slot(open_match.group(1))
+        query = _clean_query(open_match.group(1))
         if _is_context_reference(query):
             query = ""
         else:
-            query = re.sub(r"^(?:my|the|a|an)\s+", "", query, flags=re.I)
+            query = _ARTICLE_RE.sub("", query)
+            query = _FILE_PREFIX_RE.sub("", query)
+            query = re.sub(r"^(?:named|called|titled)\s+", "", query, flags=re.I)
+            query = re.sub(r"\s+(?:file|document|doc)$", "", query, flags=re.I)
+            query = _clean_slot(query)
         if not query:
             return _plan(
                 "open_document", TIER_READ, "voice_open_document",

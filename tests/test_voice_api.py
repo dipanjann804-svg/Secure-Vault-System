@@ -79,6 +79,16 @@ def test_open_document_returns_preview_action(login_as, make_document):
     assert body["client_action"] == {"type": "open_preview", "doc_id": doc_id}
 
 
+def test_open_unknown_file_suggests_real_names(login_as, make_document):
+    vault, user = login_as()
+    make_document(user.id, name="passport.pdf")
+    body = vault.voice("open my file named passpart").get_json()
+    assert body["intent"] == "open_document"
+    assert "client_action" not in body
+    assert body["data"]["suggestions"] == ["passport.pdf"]
+    assert "passport.pdf" in body["speak"]
+
+
 def test_open_folder_returns_navigation(login_as, make_document):
     vault, user = login_as()
     make_document(user.id, name="invoice.pdf", folder="Finance")

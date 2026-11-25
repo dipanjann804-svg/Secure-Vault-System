@@ -11,6 +11,7 @@ Security boundaries:
 """
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import secrets
@@ -238,6 +239,29 @@ def _find_contacts(query):
     ).order_by(Contact.name.asc()).limit(8).all()
 
 
+def _document_names(limit=200):
+    """Recent live filenames for the signed-in owner, newest first."""
+    rows = Document.query.with_entities(Document.original_filename).filter(
+        Document.user_id == current_user.id,
+        Document.deleted_at.is_(None),
+    ).order_by(Document.created_at.desc()).limit(limit).all()
+    return [row[0] for row in rows if row[0]]
+
+
+def _suggest_documents(query, limit=3):
+    """Closest real filenames to a possibly misheard name."""
+    names = _document_names()
+    if not query or not names:
+        return []
+    by_lower = {}
+    for name in names:
+        by_lower.setdefault(name.lower(), name)
+    close = difflib.get_close_matches(
+        query.lower(), list(by_lower), n=limit, cutoff=0.45
+    )
+    return [by_lower[key] for key in close]
+
+
 def _folder_names():
     defaults = list(current_app.config.get("VOICE_DEFAULT_FOLDERS", []))
     hidden = set()
@@ -338,6 +362,22 @@ def _handle_read(plan, ctx):
         if not docs:
             if not query:
                 return _response("Which file should I open? Tell me its name first.")
+            # Speech recognition often mangles a name. Offer real filenames
+            # instead of a dead end, so the next try can succeed.
+            suggestions = _suggest_documents(query)
+            if suggestions:
+                return _response(
+                    f"I couldn't find a file matching {query}. Did you mean: "
+                    + "; ".join(suggestions) + "?",
+                    data={"documents": [], "suggestions": suggestions},
+                )
+            recent = _document_names(limit=5)
+            if recent:
+                return _response(
+                    f"I couldn't find a file matching {query}. Your files are: "
+                    + "; ".join(recent) + ". Say the exact name to open one.",
+                    data={"documents": [], "suggestions": recent},
+                )
             return _response(f"I couldn't find a file matching {query}.")
         if len(docs) > 1:
             names = "; ".join(_list_line(doc) for doc in docs[:5])

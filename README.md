@@ -57,6 +57,7 @@ Secure-Vault-System/
 ├── Procfile             # production process file
 ├── .env.example         # environment variable template
 ├── security.md          # security hardening guide
+├── tests/               # pytest suite: voice parser/API/security, regression, migration
 ├── templates/           # Jinja2 pages
 │   ├── index.html       # landing page (/)
 │   ├── login.html       # login page (/login)
@@ -111,6 +112,24 @@ Custom port:
 ```powershell
 $env:PORT=5000; python app.py
 ```
+
+## Tests
+
+`tests/` runs against a throwaway SQLite database, temporary upload and trash folders, and a test-only `ENCRYPTION_KEY`, so `app.db` and `uploads/` are never touched. `conftest.py` sets those variables before `import app`, because the app is built at import time.
+
+```powershell
+pip install -r requirements.txt
+pip install pytest
+python -m pytest tests -q
+```
+
+| File | Covers |
+|---|---|
+| `test_voice_parser.py` | Intent parsing and the read-only / confirm / blocked tiers |
+| `test_voice_api.py` | `/voice/state`, command, confirm and cancel responses |
+| `test_voice_security.py` | CSRF, owner scoping, nonce replay and expiry, rate limits |
+| `test_regression.py` | Existing vault routes still behave |
+| `test_migration.py` | `_sync_schema()` upgrades an old `app.db` without losing rows |
 
 ## Environment Variables
 
@@ -278,6 +297,31 @@ The dashboard includes an optional tap-to-talk panel. It is microphone-only: the
 - “Create a note titled Renewal dates with content passport expires in June”
 - “Share passport.pdf with Rahul one time for one hour”
 - “Cancel”
+
+### Verify it with a real microphone
+
+The automated suite covers the parser, the API, the security rules and the migration, but it cannot exercise the browser's speech engine. Check that link by hand in Chrome or Edge.
+
+1. Start the app and open **http://127.0.0.1:5555** — not the Wi-Fi address. The Web Speech API only runs in a secure context, and loopback counts as one.
+2. Stay online. Chrome streams audio to Google's recognizer and Edge to Microsoft's, so a blocking VPN or firewall produces `network` errors.
+3. Have one file (`passport.pdf`) and one saved contact (**Rahul**, added in Settings) ready — voice can only share with saved contacts.
+4. Allow the microphone when the browser asks on the first tap.
+
+Open the **🎙 Voice** button. The panel starts at *"Tap to talk"* with the status *"Ready. Microphone stays off until you tap."* Each tap listens for a single phrase, showing *"Listening…"* and then *"Thinking…"* while your transcript appears as a bubble.
+
+**Note creation.** Say *"Create a note titled Renewal dates saying passport expires in June."* Expect *"I can create a note titled Renewal dates. Say confirm or tap Confirm. I will not read the note content aloud."* plus a pending strip reading `Create a note titled "Renewal dates". Confirm within 300 seconds.` with **Cancel** / **Confirm**. Nothing is saved yet. Say *"confirm"* or press **Confirm** → *"Note titled Renewal dates was created. Refresh the page to see it."* Confirming a second time must not create a duplicate.
+
+**Share link.** Say *"Share passport.pdf with Rahul one time for one hour."* Expect *"I can share passport.pdf with Rahul, one-time, for 1 hour. Say confirm or tap Confirm. No link password will be added; …"* and a pending strip naming the file, contact, usage and expiry. Confirm → *"Share link created for Rahul. …"* with a read-only link field and a **Copy** button. Open the link once to download, then again to confirm it is spent (**410 Gone**, because the default is single-use).
+
+**Guardrails.** *"Delete all my files"*, *"Send an email to rahul@example.com"* and *"Change my password to hunter2"* must each come back blocked, with no Confirm offered.
+
+| Status line | Meaning |
+|---|---|
+| "Speech recognition is not available in this browser. Use Chrome or Edge." | Browser lacks the API, or the page is not on a secure origin |
+| "The browser speech service is offline. Check your connection." | No route to the browser's speech backend (offline, VPN, firewall) |
+| "Microphone access is blocked. Allow it in the browser and try again." | Site permission denied — allow the mic, then reload |
+| "I didn't catch a command I know. Say help to hear what I can do." | Misheard; the transcript bubble shows what the browser sent |
+| "I'm getting too many requests. Please wait a minute and try again." | Rate limit hit (`VOICE_RATE_LIMIT` per `VOICE_RATE_WINDOW_SECONDS`) |
 
 ## Feature design notes
 
