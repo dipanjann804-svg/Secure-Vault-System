@@ -45,7 +45,8 @@ _USAGE_LABELS = {"once": "one-time", "multi": "multiple-use"}
 # People rarely dictate a bare command. Strip the polite padding around it so
 # "can you please open my passport" reaches the same planner as "open passport".
 _LEAD_IN_PATTERNS = (
-    r"^(?:hey|hi|hello|ok|okay|so|um|uh|er|now|alright|buffy)\b[\s,]*",
+    r"^(?:hey|hi|hello|good morning|good afternoon|good evening|"
+    r"ok|okay|so|um|uh|er|now|alright|buffy)\b[\s,]*",
     r"^please\b[\s,]*",
     r"^(?:can|could|would|will)\s+you(?:\s+please)?\b[\s,]*",
     r"^i\s*(?:'d|would)\s+like\s+(?:you\s+)?to\b[\s,]*",
@@ -217,12 +218,58 @@ def _run_tool(tool: Tool, text: str):
     return None
 
 
-def _match_tools(tools, text):
+def _match_tool(tools, text):
+    """The first (tool, plan) that answers the text, or (None, None)."""
     for tool in tools:
         plan = _run_tool(tool, text)
         if plan is not None:
-            return plan
-    return None
+            return tool, plan
+    return None, None
+
+
+def _match_tools(tools, text):
+    return _match_tool(tools, text)[1]
+
+
+_GREETING_RE = re.compile(
+    r"^(?:hi|hello|hey|yo|good morning|good afternoon|good evening)\b", re.I
+)
+
+
+def _greeting_lead(clause):
+    low = clause.lower()
+    if "morning" in low:
+        return "Good morning."
+    if "afternoon" in low:
+        return "Good afternoon."
+    if "evening" in low:
+        return "Good evening."
+    return "Hello."
+
+
+def _small_talk_reply(text):
+    """Answer one greeting, or a short chain like "Good morning. How are you?".
+
+    People rarely say only "hello": they greet and then ask how you are, so a
+    whole utterance made of small-talk phrases is answered as one friendly
+    reply instead of falling through to "I'm not sure".
+    """
+    _tool, plan = _match_tool(_SMALL_TALK_TOOLS, text)
+    if plan is not None:
+        return plan
+    clauses = [c.strip() for c in re.split(r"[.!?,;]+|\s+and\s+", text) if c.strip()]
+    if len(clauses) < 2:
+        return None
+    replies = []
+    for clause in clauses:
+        _tool, plan = _match_tool(_SMALL_TALK_TOOLS, clause)
+        if plan is None:
+            return None
+        replies.append(plan["speak"])
+    speech = replies[-1]
+    if _GREETING_RE.match(clauses[0]) and not _GREETING_RE.match(clauses[-1]):
+        speech = _greeting_lead(clauses[0]) + " " + speech
+    return _plan("small_talk", TIER_READ, "voice_small_talk", speech)
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +297,9 @@ _SMALL_TALK_TOOLS = (
         "small_talk", "voice_small_talk",
         "I'm here and ready. Tap the microphone and tell me what you need.",
         patterns=(
-            r"^(?:how are you|how'?s it going|how are things|are you there|"
-            r"can you hear me|are you listening)$",
+            r"^(?:how are you|how are you doing|how are you today|how are you doing today|"
+            r"how do you do|how have you been|how'?s it going|how are things|"
+            r"are you there|can you hear me|are you listening|nice to meet you)$",
         ),
     ),
     Tool(
@@ -872,7 +920,7 @@ def parse_voice_command(text: str):
     # A greeting is a complete utterance, so answer it before the polite
     # padding is stripped away.
     short = re.sub(r"[\s.!?,]+$", "", original.lower())
-    plan = _match_tools(_SMALL_TALK_TOOLS, short)
+    plan = _small_talk_reply(short)
     if plan is not None:
         return plan
 

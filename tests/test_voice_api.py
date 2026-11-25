@@ -152,6 +152,14 @@ def test_small_talk_is_answered(login_as):
     assert body["status"] == "ok"
 
 
+def test_greeting_plus_how_are_you_gets_a_friendly_answer(login_as):
+    vault, _user = login_as()
+    body = vault.voice("Good morning. How are you?").get_json()
+    assert body["intent"] == "small_talk"
+    assert body["status"] == "ok"
+    assert body["speak"].startswith("Good morning.")
+
+
 def test_how_to_question_is_answered(login_as):
     vault, _user = login_as()
     body = vault.voice("how do I upload a file").get_json()

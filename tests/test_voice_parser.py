@@ -95,6 +95,25 @@ def test_small_talk_gets_a_friendly_answer():
         assert plan["speak"], text
 
 
+def test_greeting_and_check_in_together_are_small_talk():
+    plan = parse_voice_command("Good morning. How are you?")
+    assert plan["intent"] == "small_talk"
+    assert plan["speak"].startswith("Good morning.")
+    assert "ready" in plan["speak"].lower()
+
+
+def test_small_talk_chain_answers_the_last_question():
+    plan = parse_voice_command("thanks, and how are you doing today")
+    assert plan["intent"] == "small_talk"
+    assert "ready" in plan["speak"].lower()
+
+
+def test_greeting_before_a_command_still_runs_the_command():
+    plan = parse_voice_command("Good morning, open passport.pdf")
+    assert plan["intent"] == "open_document"
+    assert plan["document_query"] == "passport.pdf"
+
+
 def test_how_to_questions_get_a_direct_answer():
     for text in (
         "how do I upload a file",
