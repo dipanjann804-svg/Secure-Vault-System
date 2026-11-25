@@ -144,19 +144,15 @@
           window.location.href = '/dashboard';
         }
       } else if (action.type === 'open_settings') {
-        closePanel();
         const btn = document.getElementById('openSettingsBtn');
         if (btn) btn.click();
       } else if (action.type === 'open_trash') {
-        closePanel();
         const btn = document.getElementById('openTrashBtn');
         if (btn) btn.click();
       } else if (action.type === 'navigate' && action.url) {
         setTimeout(() => { window.location.href = action.url; }, 700);
       } else if (action.type === 'share_link' && action.url) {
         appendShareCard(action.url);
-      } else if (action.type === 'reload') {
-        setTimeout(() => { window.location.reload(); }, action.delay_ms || 1200);
       }
     }
 
@@ -236,7 +232,7 @@
     try {
       const res = await fetch('/voice/state', { method: 'GET' });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.pending) setPending(data.pending);
+      if (res.ok) setPending(data.pending || null);
     } catch (e) {}
   }
 
@@ -316,6 +312,7 @@
     fab.classList.add('open');
     fab.setAttribute('aria-expanded', 'true');
     restoreState();
+    (micBtn.disabled ? closeBtn : micBtn).focus();
   }
 
   function closePanel() {
@@ -325,6 +322,7 @@
     panel.setAttribute('aria-hidden', 'true');
     fab.classList.remove('open');
     fab.setAttribute('aria-expanded', 'false');
+    fab.focus();
   }
 
   fab.addEventListener('click', () => {

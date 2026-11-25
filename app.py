@@ -1405,8 +1405,8 @@ def create_app():
         return response
 
     # --- Public share links ---
-    def _create_share_record(docs, kind, folder, options):
-        """Create a share row, freeze a folder bundle, and email a saved contact."""
+    def _create_share_record(docs, kind, folder, options, send_email=True):
+        """Create a share row, freeze a folder bundle, and optionally email a contact."""
         token = secrets.token_urlsafe(32)  # 256 bits; only the hash is stored
         contact = options["contact"]
         link = ShareLink(
@@ -1439,7 +1439,7 @@ def create_app():
         share_url = url_for("shared_file", token=token, _external=True)
         email_sent = False
         email_message = ""
-        if contact:
+        if contact and send_email:
             result = send_share_email(
                 to_email=contact.email,
                 recipient_name=contact.name,
@@ -1497,7 +1497,7 @@ def create_app():
 
         try:
             link, token, email_sent, email_message = _create_share_record(
-                [doc], SHARE_KIND_DOCUMENT, None, options
+                [doc], SHARE_KIND_DOCUMENT, None, options, send_email=False
             )
         except Exception:
             db.session.rollback()
@@ -1512,6 +1512,7 @@ def create_app():
             "url": url_for("shared_file", token=token, _external=True),
             "recipient": contact.name,
             "email_sent": email_sent,
+            "email_skipped": True,
             "email_message": email_message,
             "expires_in": _share_time_left(link.expires_at),
             "usage": options["usage"],

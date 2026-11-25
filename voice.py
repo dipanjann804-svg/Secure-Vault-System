@@ -229,9 +229,9 @@ def _find_contacts(query):
     exact = Contact.query.filter(
         Contact.user_id == current_user.id,
         func.lower(Contact.name) == query.lower(),
-    ).first()
+    ).order_by(Contact.name.asc()).limit(8).all()
     if exact:
-        return [exact]
+        return exact
     return Contact.query.filter(
         Contact.user_id == current_user.id,
         Contact.name.ilike(f"%{query}%"),
@@ -240,10 +240,11 @@ def _find_contacts(query):
 
 def _folder_names():
     defaults = list(current_app.config.get("VOICE_DEFAULT_FOLDERS", []))
+    hidden = set()
     try:
         hidden_value = json.loads(current_user.hidden_folders or "[]")
-        hidden = set(hidden_value) if isinstance(hidden_value, list) else set()
-        defaults = [name for name in defaults if name not in hidden]
+        if isinstance(hidden_value, list):
+            hidden = {str(name).lower() for name in hidden_value if isinstance(name, str)}
     except (TypeError, ValueError):
         pass
     rows = db.session.query(Document.folder).filter(
@@ -255,7 +256,7 @@ def _folder_names():
     result = []
     for name in names:
         key = name.lower()
-        if key not in seen:
+        if key not in seen and key not in hidden:
             seen.add(key)
             result.append(name)
     return result
@@ -273,6 +274,7 @@ def _summary_payload():
         ShareLink.user_id == current_user.id,
         ShareLink.revoked_at.is_(None),
         or_(ShareLink.expires_at.is_(None), ShareLink.expires_at > _now()),
+        or_(ShareLink.max_uses.is_(None), ShareLink.use_count < ShareLink.max_uses),
     ).count()
     folders = len(_folder_names())
     speak = (
@@ -366,13 +368,24 @@ def _handle_read(plan, ctx):
     if intent == "open_folder":
         query = (plan.get("folder_query") or "").strip()
         names = _folder_names()
+        if not query:
+            if not names:
+                return _response("You do not have any folders yet.")
+            return _response(
+                "Which folder? Your folders are: " + "; ".join(names) + "."
+            )
+        if not names:
+            return _response("You do not have any folders yet.")
         match = next((name for name in names if name.lower() == query.lower()), None)
         if not match:
             matches = [name for name in names if query.lower() in name.lower()] if query else []
             if len(matches) == 1:
                 match = matches[0]
         if not match:
-            return _response(f"I couldn't find a folder named {query}.")
+            return _response(
+                f"I couldn't find a folder named {query}. Your folders are: "
+                + "; ".join(names) + "."
+            )
         return _response(
             f"Opening the {match} folder.",
             client_action={"type": "navigate", "url": f"/folders/{quote(match, safe='')}"},
@@ -440,7 +453,14 @@ def _prepare_note(plan, ctx):
     title = plan.get("note_title") or "Voice note"
     content = plan.get("note_content") or ""
     if len(title) > 120 or len(content) > 2000:
+        _audit("voice_create_note", "too_long", "FAILED")
         return _response("That note is too long for me to safely repeat back.")
+    if not content.strip():
+        _audit("voice_create_note", "missing_content", "FAILED")
+        return _response(
+            "What should the note say? Say something like: create a note titled "
+            "Renewal dates with content passport expires in June."
+        )
     summary = f"Create a note titled \"{title}\"."
     pending = _set_pending(ctx, {
         "kind": "create_note",
@@ -482,7 +502,8 @@ def _prepare_share(plan, ctx):
         names = "; ".join(contact.name for contact in contact_matches[:8])
         _audit("voice_share_prepare", "ambiguous_contact")
         return _response(
-            f"I found several saved contacts: {names}. Please say their exact name."
+            f"I found several saved contacts: {names}. Please use a unique saved "
+            "contact name, or rename one in Settings."
         )
     contact = contact_matches[0]
     expiry = plan.get("expiry") or "1h"
@@ -519,13 +540,18 @@ def _execute_note(action):
     title = str(action.get("title") or "").strip()
     content = str(action.get("content") or "")
     if not title:
+        _audit("voice_create_note", "missing_title", "FAILED")
         return _response("The pending note had no title, so nothing was created.", status="error")
     if len(title) > 120 or len(content) > 2000:
+        _audit("voice_create_note", "too_long", "FAILED")
         return _response("The pending note was too long, so nothing was created.", status="error")
+    if not content.strip():
+        _audit("voice_create_note", "missing_content", "FAILED")
+        return _response("The pending note was empty, so nothing was created.", status="error")
     note = Note(
         user_id=current_user.id,
         title=title[:255],
-        content=encrypt_note(content),
+        content=encrypt_note(content.strip()),
         created_at=_now(),
     )
     db.session.add(note)
@@ -534,9 +560,7 @@ def _execute_note(action):
     db.session.commit()
     return _response(
         f"Note titled {title} was created. Refresh the page to see it.",
-        f"Note titled {title} was created. Refresh the page to see it.",
         status="ok",
-        client_action={"type": "reload", "delay_ms": 1200},
     )
 
 
@@ -582,10 +606,12 @@ def _execute_share(action, share_creator):
     _audit("voice_share", "executed")
     db.session.commit()
     recipient = result.get("recipient") or contact.name
-    email_note = (
-        "The email was sent." if result.get("email_sent")
-        else "Email was not sent, so copy the link from this panel."
-    )
+    if result.get("email_skipped"):
+        email_note = "Voice never sends email; copy the link from this panel."
+    elif result.get("email_sent"):
+        email_note = "The email was sent."
+    else:
+        email_note = "Email was not sent, so copy the link from this panel."
     return _response(
         f"Share link created for {recipient}. The link is on screen now; copy it "
         f"before closing the assistant. {email_note}",

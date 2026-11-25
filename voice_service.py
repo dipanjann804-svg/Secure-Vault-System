@@ -41,7 +41,8 @@ def _clean_slot(value: str) -> str:
 
 def _is_context_reference(value: str) -> bool:
     value = _clean_slot(value).lower()
-    value = re.sub(r"^(?:the|that|this)\s+", "", value)
+    value = re.sub(r"^(?:the|that|this|my|a|an|some)\s+", "", value)
+    value = re.sub(r"^(?:last|latest|most recent|previous)\s+", "", value)
     return value in {"", "it", "that", "this", "file", "document", "one"}
 
 
@@ -211,7 +212,11 @@ def parse_voice_command(text: str):
         )
 
     # List documents
-    if re.match(r"^(?:please\s+)?(?:list|show|what are|what'?s in)\s+(?:all\s+)?(?:my\s+)?(?:documents|files)\b", low):
+    if re.match(
+        r"^(?:please\s+)?(?:list|show|what are|what'?s in)\s+(?:me\s+)?"
+        r"(?:all\s+)?(?:my\s+)?(?:documents|files)\b",
+        low,
+    ) or re.match(r"^(?:what|which)\s+(?:documents|files)\s+do\s+i\s+have\b", low):
         return _plan(
             "list_documents", TIER_READ, "voice_list_documents",
             "Here are your files.",
@@ -221,29 +226,44 @@ def parse_voice_command(text: str):
             "list_documents", TIER_READ, "voice_list_documents",
             "Here is the file count.",
         )
+    if re.match(r"^(?:open|show)\s+(?:me\s+)?(?:my\s+)?(?:documents|files)$", low):
+        return _plan(
+            "list_documents", TIER_READ, "voice_list_documents",
+            "Here are your files.",
+        )
 
     # List folders
-    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:my\s+)?folders?\b", low):
+    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:my\s+)?folders?\b", low):
         return _plan(
             "list_folders", TIER_READ, "voice_list_folders",
             "Here are your folders.",
         )
 
     # List notes (titles only; note text is never sent through the assistant)
-    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:my\s+)?notes?\b", low):
+    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:my\s+)?notes?\b", low):
         return _plan(
             "list_notes", TIER_READ, "voice_list_notes",
             "Here are your note titles.",
         )
 
     # List saved contacts (names only)
-    if re.match(r"^(?:please\s+)?(?:list|show|who are)\s+(?:my\s+)?(?:saved\s+)?contacts?\b", low):
+    if re.match(
+        r"^(?:please\s+)?(?:list|show|who are)\s+(?:me\s+)?(?:my\s+)?"
+        r"(?:saved\s+)?contacts?\b",
+        low,
+    ):
         return _plan(
             "list_contacts", TIER_READ, "voice_list_contacts",
             "Here are your saved contacts.",
         )
 
     # Open folder
+    if re.fullmatch(r"(?:please\s+)?(?:open|go to|show)\s+(?:the\s+)?folder", low):
+        return _plan(
+            "open_folder", TIER_READ, "voice_open_folder",
+            "Which folder?",
+            folder_query="",
+        )
     folder_match = re.match(
         r"^(?:please\s+)?(?:open|go to|show)\s+(?:the\s+)?folder\s+(.+?)(?:\s+folder)?$",
         original, re.I,
@@ -273,6 +293,7 @@ def parse_voice_command(text: str):
     if search_match:
         query = _clean_slot(search_match.group(1))
         query = re.sub(r"\s+(?:in my vault|for me|please)$", "", query, flags=re.I)
+        query = re.sub(r"^(?:my|the|a|an)\s+", "", query, flags=re.I)
         return _plan(
             "search_documents", TIER_READ, "voice_search_documents",
             "Searching your files.",
@@ -339,6 +360,7 @@ def parse_voice_command(text: str):
                 "Rahul, one time for one hour. Only saved contacts can be used.",
             )
         doc_part = _clean_slot(body[:split.start()])
+        doc_part = re.sub(r"^(?:my|the)\s+", "", doc_part, flags=re.I)
         contact_part = body[split.end():].strip()
         contact_part = re.sub(
             r"^(?:my\s+)?(?:saved\s+)?contact\s+", "", contact_part, flags=re.I
@@ -379,6 +401,8 @@ def parse_voice_command(text: str):
         query = _clean_slot(open_match.group(1))
         if _is_context_reference(query):
             query = ""
+        else:
+            query = re.sub(r"^(?:my|the|a|an)\s+", "", query, flags=re.I)
         if not query:
             return _plan(
                 "open_document", TIER_READ, "voice_open_document",

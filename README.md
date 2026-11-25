@@ -14,17 +14,20 @@ A Flask web app for storing personal documents and notes securely. Files are org
 - **Password recovery** — expiring (1 hour) reset links sent via SMTP / HTTP email API
 - **Change password** — update credentials while logged in
 - **Document vault** — upload multiple files (up to 50 MB per request), organized by folder, with search, download, single + batch delete
+- **In-browser preview** — PDFs and images render inline for the owner; unsafe types stay download-only
+- **Trash with 30-day retention** — deleted documents are recoverable for 30 days
 - **Encrypted notepad** — notes encrypted with Fernet (AES) before storage, decrypted on read; download as `.txt`, single + batch delete
+- **Expiring, protected share links** — revocable single-file or frozen-folder links with optional password gates, one-time/multi-use limits and access history
+- **Saved contacts** — owner-entered recipients for share links; voice can select them but never accepts a dictated email address
+- **Tap-to-talk voice assistant** — optional English (`en-US`) microphone panel. Read-only commands run immediately; note creation and sharing require confirmation; delete, password, upload and outbound-email actions are refused. No audio or full transcript is stored
 - **Profile management** — name, phone, date of birth, gender, location, avatar upload
-- **Security logging** — login attempts (success/failed) recorded with IP + user agent
+- **Security logging** — login attempts and voice/share actions recorded with IP + user agent; voice audit rows never contain transcripts or note text
+- **CSRF protection** — every POST, including JSON `fetch()` calls, requires a Flask-WTF token
+- **Account deletion** — permanently erase the account and all of its data after password + phrase checks
 - **Dark / light mode** — toggle synced across all pages via `localStorage`
 
 ### Planned
 
-- **In-browser document preview** — view PDFs and images without downloading
-- **Trash with 30-day retention** — deleted documents are recoverable for 30 days
-- **Expiring, protected share links** — send a document to someone via a revocable link instead of emailing the file
-- **Account deletion** — permanently erase the account and all of its data
 - **Email verification at registration** — confirm the address before the vault unlocks
 - **Emergency Lockdown** — one click kills every session, link and download
 - **Advanced catalogue** — steganographic vault, canary bait files, Shamir key sharding, air-gapped HTML export, time-capsules, forensic watermarking, shoulder-surfer guard, emergency shredder, plus workstation features. See [Advanced Feature Catalogue](#advanced-feature-catalogue-planned--experimental).
@@ -44,9 +47,11 @@ A Flask web app for storing personal documents and notes securely. Files are org
 ```
 Secure-Vault-System/
 ├── app.py               # Flask app factory, all routes, startup (port 5555)
-├── models.py            # User, Document, Note, SecurityLog models
+├── models.py            # User, Document, Note, Contact, ShareLink, VoiceContext, SecurityLog models
+├── voice.py             # Voice API routes, pending-action state, audit + rate limiting
+├── voice_service.py     # Deterministic English command parser and safety tiers
 ├── encryption.py        # Fernet encrypt_note / decrypt_note helpers
-├── email_service.py     # password-reset email sender (Resend / Brevo / SMTP)
+├── email_service.py     # password-reset and share email sender (Resend / Brevo / SMTP)
 ├── config.py            # Config class (SECRET_KEY, DB, mail settings)
 ├── requirements.txt
 ├── Procfile             # production process file
@@ -59,10 +64,14 @@ Secure-Vault-System/
 │   ├── forgot_password.html # reset request (/forgot-password)
 │   ├── reset_password.html  # set new password (/reset-password/<token>)
 │   ├── change_password.html # change password (/change-password)
-│   ├── dashboard.html       # main vault UI (/dashboard)
+│   ├── dashboard.html       # main vault UI (/dashboard), includes the voice panel
+│   ├── shares.html          # owner share-link management (/shares)
+│   ├── share.html           # public share landing / password gate (/s/<token>)
 │   └── base.html            # legacy base layout
 ├── static/
 │   └── js/
+│       ├── csrf.js      # fetch() CSRF wrapper for JSON requests
+│       ├── voice.js     # browser speech recognition/synthesis + voice panel
 │       └── alert.js     # demo JS (not required by app)
 ├── utils/
 │   └── time.py          # lockout prototype (logic ported into app.py)
@@ -119,8 +128,12 @@ $env:PORT=5000; python app.py
 | `MAIL_DEFAULT_SENDER` | No | From-address (defaults to `MAIL_USERNAME`) |
 | `RESEND_API_KEY` | No | Preferred on Render — sends mail over HTTPS 443 instead of SMTP |
 | `BREVO_API_KEY`  | No | Alternative HTTPS mail provider |
+| `VOICE_RATE_LIMIT` | No | Voice commands per user per window (default `20`, minimum `3`) |
+| `VOICE_RATE_WINDOW_SECONDS` | No | Voice rate-limit window in seconds (default `60`, minimum `30`) |
+| `VOICE_PENDING_TTL_SECONDS` | No | Seconds a voice confirmation stays valid (default `300`, minimum `60`) |
+| `VOICE_CONTEXT_TTL_SECONDS` | No | Seconds the short document-reference context is kept (default `1800`, minimum `300`) |
 
-Planned additions: `TRASH_RETENTION_DAYS` (default `30`), `SHARE_BASE_URL` (defaults to `APP_URL`).
+Voice commands do not need an external LLM or provider key. Speech recognition and playback stay in the browser; the server receives recognized text only.
 
 ## Routes
 
@@ -138,12 +151,28 @@ Planned additions: `TRASH_RETENTION_DAYS` (default `30`), `SHARE_BASE_URL` (defa
 | `/dashboard` | GET | ✅ | Vault UI (documents + notes + profile) |
 | `/documents/upload` | POST | ✅ | Upload files to a folder |
 | `/documents/<id>/download` | GET | ✅ | Download own file |
-| `/documents/delete` | POST | ✅ | Delete own files (JSON `ids` or form) |
+| `/documents/<id>/preview` | GET | ✅ | Inline render of PDF / image (owner only) |
+| `/documents/delete` | POST | ✅ | Move own files to trash (JSON `ids` or form) |
+| `/trash` | GET | ✅ | List trashed documents with days remaining |
+| `/trash/restore` | POST | ✅ | Restore selected documents |
+| `/trash/purge` | POST | ✅ | Permanently delete selected documents now |
+| `/documents/<id>/share` | POST | ✅ | Create a protected share link |
+| `/folders/share` | POST | ✅ | Create a frozen-folder share bundle |
+| `/contacts` | GET, POST | ✅ | List or add saved share recipients |
+| `/shares` | GET | ✅ | List active links + access history |
+| `/shares/<id>/revoke` | POST | ✅ | Immediate revocation |
+| `/s/<token>` | GET, POST | — | Public share landing page (password / expiry gate) |
+| `/s/<token>/download` | POST | — | Consume one download |
+| `/voice/state` | GET | ✅ | Voice panel state and current pending action |
+| `/voice/command` | POST | ✅ | Parse and execute a recognized text command |
+| `/voice/confirm` | POST | ✅ | Atomically claim and execute a pending voice action |
+| `/voice/cancel` | POST | ✅ | Cancel the current pending voice action |
 | `/notes/add` | POST | ✅ | Save encrypted note |
 | `/notes/delete` | POST | ✅ | Delete own notes |
 | `/folders/remove` | POST | ✅ | Remove a folder and its files |
 | `/folders/restore` | POST | ✅ | Un-hide a built-in folder |
 | `/profile/update` | POST | ✅ | Update profile + avatar |
+| `/account/delete` | POST | ✅ | Permanently delete account and data |
 | `/uploads/<filename>` | GET | ✅ | Serve uploaded file |
 | `/health/db` | GET | — | DB health check (`{"db": "ok"}`) |
 
@@ -151,16 +180,6 @@ Planned additions: `TRASH_RETENTION_DAYS` (default `30`), `SHARE_BASE_URL` (defa
 
 | Route | Methods | Auth | Description |
 |-------|---------|------|-------------|
-| `/documents/<id>/preview` | GET | ✅ | Inline render of PDF / image (owner only) |
-| `/trash` | GET | ✅ | List trashed documents with days remaining |
-| `/trash/restore` | POST | ✅ | Restore selected documents |
-| `/trash/purge` | POST | ✅ | Permanently delete selected documents now |
-| `/documents/<id>/share` | POST | ✅ | Create a protected share link |
-| `/shares` | GET | ✅ | List active links + access history |
-| `/shares/<id>/revoke` | POST | ✅ | Immediate revocation |
-| `/s/<token>` | GET, POST | — | Public share landing page (password / expiry gate) |
-| `/s/<token>/download` | POST | — | Consume one download |
-| `/account/delete` | POST | ✅ | Permanently delete account and data |
 | `/verify-email/<token>` | GET | — | Confirm an address |
 | `/verify-email/resend` | POST | ✅ | Resend the verification mail |
 | `/emergency-lockdown` | POST | ✅ | Trigger Emergency Lockdown |
@@ -171,9 +190,14 @@ Planned additions: `TRASH_RETENTION_DAYS` (default `30`), `SHARE_BASE_URL` (defa
 ### Implemented
 
 - **User** — username, email, password hash, profile fields (name, phone, DOB, gender, location, photo), hidden folders
-- **Document** — owner, stored + original filename, path, size, MIME type, folder, timestamps
+- **Document** — owner, stored + original filename, path, size, MIME type, folder, timestamps, trash metadata
 - **Note** — owner, title, **encrypted** content, timestamps
-- **SecurityLog** — user, login ID, IP, timestamp, SUCCESS/FAILED status, user agent
+- **Contact** — owner-entered name + email; voice can select a contact but never accepts a dictated address
+- **ShareLink** — owner, optional document, SHA-256 token hash, kind (`document`/`folder`), folder snapshot, expiry, max uses, atomic use count, optional password hash, revocation timestamp, recipient snapshot
+- **ShareLinkItem** — frozen document membership for folder bundles
+- **ShareAccess** — share, timestamp, IP, user agent, outcome (opened/granted/denied/expired/revoked)
+- **VoiceContext** — per-user short document-reference context, encrypted pending action + nonce, expiry, and DB-backed rate-limit counters
+- **SecurityLog** — user, login ID, IP, timestamp, SUCCESS/FAILED status, user agent, optional `tool` and `outcome` audit fields for sharing and voice actions
 
 ### Planned additions
 
@@ -213,9 +237,51 @@ AccountDeletionRequest (optional audit trail)
 
 ---
 
-## Planned Feature Specs
+## Voice assistant (implemented)
 
-Everything below is **not implemented yet**. It is written so the work can be picked up in slices.
+The dashboard includes an optional tap-to-talk panel. It is microphone-only: there is no command text box. Chrome or Edge is recommended because the browser provides `SpeechRecognition` and `SpeechSynthesis` (`en-US`). The panel shows a clear unsupported-browser message when speech recognition is unavailable.
+
+**What stays local / what is stored**
+
+- Audio is handled by the browser; it is never uploaded to this app.
+- The server receives only the recognized English text.
+- No audio, recording, or full transcript is stored.
+- `VoiceContext` keeps only a short list of document IDs (for phrases such as “open that file”), the last intent, and rate-limit counters.
+- A pending action is stored encrypted with a nonce and a short expiry. The UI shows a plain-language summary, never note content.
+
+**Command tiers**
+
+| Tier | Behaviour |
+|---|---|
+| Read-only | Lists, searches, previews, folder navigation and vault summaries run immediately |
+| Confirm | Creating a note and preparing a share create a pending action; the user must say “confirm” or press **Confirm** |
+| Blocked | Delete, purge, move-to-trash, password changes, account deletion, uploads, arbitrary email, and attempts to reveal passwords or keys are refused |
+
+**Sharing rules**
+
+- Voice can select only an existing saved contact. A dictated email address is refused, even if it appears inside another command.
+- Voice shares have no link password; use the normal share dialog for a protected link.
+- Defaults are one-time use and one hour; the accepted ranges are 10 minutes, 1 hour, or 24 hours.
+- The server revalidates the owner, live document, saved contact, and options when **Confirm** is pressed, not only when the command is first heard.
+- A confirmation nonce is single-use and is cleared atomically. Expired, replayed, or another user's nonce is rejected.
+- Voice sharing does **not** send email. The new link is shown in the panel and can be copied.
+- Every voice action writes a `SecurityLog` row with `tool` and `outcome`; transcripts and note content are never written to those rows.
+- Voice commands are CSRF-protected, rate limited per user, and every voice response is `Cache-Control: no-store`.
+
+**Try these commands**
+
+- “List my documents”
+- “Search for passport”
+- “Open that file”
+- “Open the Finance folder”
+- “Give me a vault summary”
+- “Create a note titled Renewal dates with content passport expires in June”
+- “Share passport.pdf with Rahul one time for one hour”
+- “Cancel”
+
+## Feature design notes
+
+These notes started as the build plan. In-browser preview, trash, share links, account deletion, and the voice assistant are implemented now; this section keeps the threat-model rationale behind them. Email verification and Emergency Lockdown remain planned.
 
 ### 1. In-browser preview for PDFs and images
 
