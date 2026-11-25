@@ -69,6 +69,145 @@ _NOTE_BODY_RE = re.compile(
     r"\b(?:with\s+(?:the\s+)?content|saying|that\s+says|containing|content)\b", re.I
 )
 
+# Short social or meta phrases get a friendly answer instead of "I didn't
+# catch that". Each pattern must match the whole utterance.
+_SMALL_TALK = (
+    (
+        r"(?:hi|hello|hey|yo|good morning|good afternoon|good evening)"
+        r"(?:\s+(?:there|buffy|vault))?",
+        "Hello. Tap the microphone and ask me to list or search files, open a "
+        "file or folder, summarize your vault, list notes, contacts, or shares, "
+        "create a note, or prepare a share.",
+    ),
+    (
+        r"(?:thanks|thank you|thanks a lot|thank you so much|cheers|great|"
+        r"perfect|nice|good job|well done)",
+        "You're welcome.",
+    ),
+    (
+        r"(?:how are you|how'?s it going|how are things|are you there|"
+        r"can you hear me|are you listening)",
+        "I'm here and ready. Tap the microphone and tell me what you need.",
+    ),
+    (
+        r"(?:who are you|what are you|what'?s your name|what is your name|your name)",
+        "I'm the vault assistant. I work with the files, notes, contacts, and "
+        "share links in this vault, and I ask you to confirm before changing "
+        "anything.",
+    ),
+    (
+        r"(?:ok|okay|alright|got it|cool|sure|nothing|nothing else|"
+        r"that'?s all|that is all)",
+        "Ready. Tap the microphone when you want to ask something.",
+    ),
+)
+
+_COUNT_RE = re.compile(r"^how\s+many\b", re.I)
+
+# A question asks for information, so it is answered instead of refused. Only
+# an imperative can be a blocked action.
+_QUESTION_START_RE = re.compile(
+    r"^(?:how|what|when|where|which|who|why|is|are|was|were|do|does|did|"
+    r"can|could|would|should|may|might)\b",
+    re.I,
+)
+
+# Questions about how the app works. These answers are static: no lookup and
+# no side effects, so any of them can be spoken immediately.
+_FAQ = (
+    (
+        r"\b(?:how|where|can)\b.*\b(?:upload|add|import)\b.*\b(?:files?|documents?|pdfs?)\b",
+        "Tap Add files on the dashboard, choose a folder, and pick the file. "
+        "Uploads happen in the interface only; I cannot take a file by voice.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:share|sharing|link)\b",
+        "Open a file and choose Share, or say: share passport dot pdf with "
+        "Rahul. You can pick 10 minutes, 1 hour, or 24 hours, one time or "
+        "multiple times. I never send email and never accept an email address "
+        "by voice.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\bcontacts?\b",
+        "Open Settings, then Saved contacts, and add the person's name and "
+        "email. I can only share with a saved contact.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:delete|close|remove)\b.*\baccount\b",
+        "Use Settings, then Delete account. It asks for your password and your "
+        "phrase, and I cannot do that by voice.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:delete|remove|trash|restore|recover)\b",
+        "Select the file and move it to Trash. Deleted files stay there for 30 "
+        "days, and the Trash panel can restore them or empty the trash. I "
+        "cannot delete anything by voice.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\bpassword\b",
+        "Use Change password on the dashboard. I never take, speak, or change "
+        "a password by voice.",
+    ),
+    (
+        r"\b(?:how|is|are|does)\b.*\b(?:encrypt|encryption|encrypted|secure|"
+        r"safe|protected|security)\b",
+        "Files are encrypted before they are stored, and notes are encrypted "
+        "too. Share links can be one-time or time-limited, and I never speak "
+        "note contents, passwords, or keys.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\bnotes?\b",
+        "Open the Notepad, or say: create a note titled Renewals with content "
+        "passport expires in June. I ask you to confirm before saving, and I "
+        "never read a note aloud.",
+    ),
+    (
+        r"\b(?:how|can)\b.*\bfolders?\b",
+        "Folders are on the dashboard. Say open the Finance folder, or ask what "
+        "is in the Finance folder.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:download|export|backup)\b",
+        "Open a file and choose Download. There is no cloud backup; your "
+        "encrypted files stay in this vault.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:search|find|look for)\b",
+        "Say find and a word from the name, for example find passport. I list "
+        "the matches, and you can say open and the exact name.",
+    ),
+    (
+        r"\b(?:how|where|can)\b.*\b(?:open|view|preview)\b",
+        "Say open and the file name, for example open passport dot pdf. I open "
+        "the preview for you, or suggest the closest file names if I mishear.",
+    ),
+    (
+        r"\bwhat\b.*\b(?:is this app|is this site|does this app do|is secure vault)\b",
+        "Secure Vault stores your files and notes encrypted, shares them with "
+        "expiring links, and keeps a saved-contact list. Ask me to list files, "
+        "open a folder, summarize the vault, create a note, or prepare a share.",
+    ),
+)
+
+# Last-resort topic routing: a question that matched no pattern still gets a
+# useful read-only answer when it mentions a topic the vault knows about.
+_FALLBACK_TOPICS = (
+    (r"\btrash\b|\brecycle\b|\bdeleted\b", "open_trash", "Opening the trash."),
+    (r"\bsettings?\b|\bprofile\b|\baccount\b", "open_settings", "Opening settings."),
+    (r"\bshares?\b|\bshare links?\b", "list_shares", "Here are your share links."),
+    (r"\bcontacts?\b|\brecipients?\b", "list_contacts", "Here are your saved contacts."),
+    (r"\bnotes?\b|\bnotepad\b", "list_notes", "Here are your note titles."),
+    (r"\bfolders?\b", "list_folders", "Here are your folders."),
+    (
+        r"\bfiles?\b|\bdocuments?\b|\bdocs?\b|\bpdfs?\b|\buploads?\b|\bimages?\b",
+        "list_documents", "Here are your files.",
+    ),
+    (
+        r"\bvault\b|\bstorage\b|\bspace\b|\bhow many\b",
+        "vault_summary", "Here is your vault summary.",
+    ),
+)
+
 
 def _strip_lead_ins(text: str) -> str:
     """Remove conversational openers and trailing padding around a command."""
@@ -195,6 +334,13 @@ def parse_voice_command(text: str):
             "dictated_email",
         )
 
+    # A greeting, thanks, or a check-in is a complete utterance, so answer it
+    # before the polite padding is stripped away.
+    short = re.sub(r"[\s.!?,]+$", "", low)
+    for pattern, reply in _SMALL_TALK:
+        if re.fullmatch(pattern, short):
+            return _plan("small_talk", TIER_READ, "voice_small_talk", reply)
+
     # Tolerate polite or indirect phrasing ("Can you please open ...",
     # "I want you to open ...") before matching any intent.
     original = _strip_lead_ins(original)
@@ -218,14 +364,16 @@ def parse_voice_command(text: str):
             "Cancelled.",
         )
 
-    if re.search(r"\b(help|what can you do|which commands|how do i use)\b", low):
+    if re.search(r"\b(help|what can you do|what can i ask|which commands|how do i use)\b", low):
         return _plan(
             "help", TIER_READ, "voice_help",
             "You can ask me to list or search files, open a file or folder, "
-            "summarize your vault, list saved contacts, create a note, or "
-            "prepare a share with a saved contact. I will ask you to confirm "
-            "before changing anything. I cannot delete files, change "
-            "passwords, or accept an email address by voice.",
+            "tell you what is in a folder, where a file is, or when you added "
+            "it, summarize your vault, list notes, contacts, or active shares, "
+            "create a note, or prepare a share with a saved contact. You can "
+            "also ask how to upload, share, or restore something. I will ask "
+            "you to confirm before changing anything. I cannot delete files, "
+            "change passwords, or accept an email address by voice.",
         )
 
     # Read-only navigation intents. These are handled before destructive
@@ -266,9 +414,40 @@ def parse_voice_command(text: str):
         (r"\b(send|compose|write)\b.*\bemail\b", "I do not send email by voice. Create a share in the interface and choose a saved contact."),
         (r"\b(show|reveal|tell|read)\b.*\b(password|secret|key)\b", "I cannot reveal passwords or encryption secrets."),
     )
-    for pattern, message in forbidden:
-        if re.search(pattern, low):
-            return _blocked(message, "forbidden_action")
+    forbidden_hit = None if _QUESTION_START_RE.match(low) else next(
+        (message for pattern, message in forbidden if re.search(pattern, low)),
+        None,
+    )
+    if forbidden_hit:
+        return _blocked(forbidden_hit, "forbidden_action")
+
+    # How-to questions about the app itself get a direct answer. "How many"
+    # questions are counts, so they skip this and reach the list handlers.
+    if not _COUNT_RE.match(low):
+        for pattern, answer in _FAQ:
+            if re.search(pattern, low):
+                return _plan("faq", TIER_READ, "voice_faq", answer)
+
+    # What is inside one folder.
+    folder_files = re.match(
+        r"^(?:what(?:'s| is| are)|which (?:files|documents) are)\s+(?:in|inside)\s+"
+        r"(?:my\s+|the\s+)?(.+?)\s+folder$",
+        original, re.I,
+    ) or re.match(
+        r"^(?:list|show)(?:\s+me)?\s+(?:the\s+|all\s+|my\s+)*(?:files|documents)\s+"
+        r"(?:in|inside)\s+(?:my\s+|the\s+)?(.+?)(?:\s+folder)?$",
+        original, re.I,
+    ) or re.match(
+        r"^how many\s+(?:files|documents)\s+(?:are\s+)?(?:in|inside)\s+"
+        r"(?:my\s+|the\s+)?(.+?)(?:\s+folder)?$",
+        original, re.I,
+    )
+    if folder_files:
+        return _plan(
+            "list_folder_contents", TIER_READ, "voice_list_folder_contents",
+            "Here is what is in that folder.",
+            folder_query=_folder_slot(folder_files.group(1)),
+        )
 
     # Summary
     if re.search(r"\b(summary|overview|what'?s in my vault|how many (?:files|documents|notes|contacts|shares))\b", low):
@@ -277,12 +456,27 @@ def parse_voice_command(text: str):
             "Here is your vault summary.",
         )
 
+    # Recently added files are the same list, newest first.
+    if re.search(r"\b(?:recent|latest|newest)\b.*\b(?:files?|documents?|uploads?)\b", low) or re.fullmatch(
+        r"(?:recent|latest|newest)\s+(?:files?|documents?|uploads?)", low
+    ) or re.search(
+        r"\b(?:add|added|upload|uploaded|saved)\b.*\b(?:recently|lately)\b"
+        r"|\b(?:recently|lately)\b.*\b(?:add|added|upload|uploaded|saved)\b",
+        low,
+    ):
+        return _plan(
+            "list_documents", TIER_READ, "voice_list_documents",
+            "Here are your most recent files.",
+        )
+
     # List documents
     if re.match(
         r"^(?:please\s+)?(?:list|show|what are|what'?s in)\s+(?:me\s+)?"
         r"(?:all\s+)?(?:my\s+)?(?:documents|files)\b",
         low,
-    ) or re.match(r"^(?:what|which)\s+(?:documents|files)\s+do\s+i\s+have\b", low):
+    ) or re.match(r"^(?:what|which)\s+(?:documents|files)\s+(?:do\s+i\s+have|are there|have i got)\b", low) or re.fullmatch(
+        r"(?:my\s+)?(?:documents|files)", low
+    ):
         return _plan(
             "list_documents", TIER_READ, "voice_list_documents",
             "Here are your files.",
@@ -299,28 +493,53 @@ def parse_voice_command(text: str):
         )
 
     # List folders
-    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:my\s+)?folders?\b", low):
+    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:all\s+)?(?:my\s+)?folders?\b", low) or re.fullmatch(
+        r"(?:what|which)\s+folders?(?:\s+(?:do\s+i\s+have|are\s+there|have\s+i\s+got|exist))?", low
+    ) or re.match(r"^how many\s+folders?\b", low) or re.fullmatch(r"(?:my\s+)?folders?", low):
         return _plan(
             "list_folders", TIER_READ, "voice_list_folders",
             "Here are your folders.",
         )
 
     # List notes (titles only; note text is never sent through the assistant)
-    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:my\s+)?notes?\b", low):
+    if re.match(r"^(?:please\s+)?(?:list|show)\s+(?:me\s+)?(?:all\s+)?(?:my\s+)?notes?\b", low) or re.match(
+        r"^(?:what|which)\s+notes?\b", low
+    ) or re.match(r"^how many\s+notes?\b", low) or re.fullmatch(r"(?:my\s+)?notes?", low):
         return _plan(
             "list_notes", TIER_READ, "voice_list_notes",
             "Here are your note titles.",
         )
 
+    # Note bodies are encrypted and never spoken aloud.
+    if re.search(r"\b(?:read|speak|recite)\b.*\bnotes?\b", low) or re.search(
+        r"\bwhat(?:'s| is)\s+(?:in|inside)\s+(?:my|the)\s+note\b", low
+    ):
+        return _blocked(
+            "I never read note contents aloud. Open the Notepad to read a note, "
+            "or ask me to list your note titles.",
+            "note_content",
+        )
+
     # List saved contacts (names only)
     if re.match(
-        r"^(?:please\s+)?(?:list|show|who are)\s+(?:me\s+)?(?:my\s+)?"
+        r"^(?:please\s+)?(?:list|show|who are|who's|what are|which are)\s+(?:me\s+)?(?:my\s+)?"
         r"(?:saved\s+)?contacts?\b",
         low,
+    ) or re.match(r"^(?:what|which)\s+(?:saved\s+)?contacts?\b", low) or re.fullmatch(
+        r"(?:my\s+)?(?:saved\s+)?contacts?", low
     ):
         return _plan(
             "list_contacts", TIER_READ, "voice_list_contacts",
             "Here are your saved contacts.",
+        )
+
+    # Active share links as an answer, not just a page to open.
+    if re.match(r"^(?:what|which)\s+shares?\b", low) or re.search(
+        r"\b(?:active|current|live)\b.*\bshare links?\b", low
+    ) or re.fullmatch(r"(?:active\s+|my\s+)?shares?", low):
+        return _plan(
+            "list_shares", TIER_READ, "voice_list_shares",
+            "Here are your active share links.",
         )
 
     # Open folder
@@ -344,12 +563,46 @@ def parse_voice_command(text: str):
         r"^(?:please\s+)?(?:open|go to)\s+(?:the\s+)?(.+?)\s+folder$",
         original, re.I,
     )
+    if not folder_match:
+        folder_match = re.match(
+            r"^(?:where(?:'s| is)|which folder is|what folder is)\s+"
+            r"(?:the\s+|my\s+)?(.+?)\s+folder$",
+            original, re.I,
+        )
     if folder_match:
         return _plan(
             "open_folder", TIER_READ, "voice_open_folder",
             "Opening that folder.",
             folder_query=_folder_slot(folder_match.group(1)),
         )
+
+    # Details about one file: where it lives, when it was added, how big it is.
+    info_match = None
+    for info_pattern in (
+        r"^(?:where is|where'?s|where can i find|where did i put)\s+(.+)$",
+        r"^(?:which|what)\s+folder\s+(?:is|has|contains)\s+(.+?)(?:\s+in)?$",
+        r"^when did i (?:add|upload|create|save)\s+(.+)$",
+        r"^what date did i (?:add|upload|create|save)\s+(.+)$",
+        r"^how (?:big|large) is\s+(.+)$",
+        r"^what size is\s+(.+)$",
+        r"^tell me about\s+(?:my\s+|the\s+)?(?:file|document)?\s*(.+)$",
+    ):
+        info_match = re.match(info_pattern, original, re.I)
+        if info_match:
+            break
+    if info_match:
+        query = _clean_query(info_match.group(1))
+        query = _ARTICLE_RE.sub("", query)
+        query = re.sub(r"^(?:file|document|doc)\s+", "", query, flags=re.I)
+        query = _FILE_PREFIX_RE.sub("", query)
+        query = re.sub(r"\s+(?:file|document|doc)$", "", query, flags=re.I)
+        query = _clean_slot(query)
+        if query:
+            return _plan(
+                "document_info", TIER_READ, "voice_document_info",
+                "Here are the details for that file.",
+                document_query=query,
+            )
 
     # Search
     search_match = re.match(
@@ -360,6 +613,9 @@ def parse_voice_command(text: str):
         query = _clean_query(search_match.group(1))
         query = re.sub(r"\s+(?:in my vault|for me|please)$", "", query, flags=re.I)
         query = _ARTICLE_RE.sub("", query)
+        query = _FILE_PREFIX_RE.sub("", query)
+        query = re.sub(r"^(?:a\s+)?(?:file|document|doc)\s+(?:called|named|titled)\s+", "", query, flags=re.I)
+        query = _clean_slot(query)
         return _plan(
             "search_documents", TIER_READ, "voice_search_documents",
             "Searching your files.",
@@ -485,7 +741,18 @@ def parse_voice_command(text: str):
             document_query=query,
         )
 
+    # The wording did not match a pattern, but the topic still does. Answer
+    # with the matching read-only view instead of a dead end.
+    for pattern, topic_intent, speak in _FALLBACK_TOPICS:
+        if re.search(pattern, low):
+            return _plan(
+                topic_intent, TIER_READ, f"voice_{topic_intent}", speak
+            )
+
     return _plan(
         "unknown", TIER_READ, "voice_unknown",
-        "I didn't catch a command I know. Say help to hear what I can do.",
+        "I'm not sure how to answer that. I can list or search files, open a "
+        "file or folder, tell you what is in a folder or where a file is, "
+        "summarize your vault, list notes, contacts, or shares, create a note, "
+        "or prepare a share. Say help for examples.",
     )

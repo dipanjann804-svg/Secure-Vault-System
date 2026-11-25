@@ -126,6 +126,46 @@ def test_list_notes_returns_titles_only(login_as, app):
     assert "encrypted-blob" not in str(body)
 
 
+def test_folder_contents_question_lists_files(login_as, make_document):
+    vault, user = login_as()
+    make_document(user.id, name="invoice.pdf", folder="Finance")
+    make_document(user.id, name="passport.pdf", folder="Identity")
+    body = vault.voice("what's in my Finance folder").get_json()
+    assert body["intent"] == "list_folder_contents"
+    assert [doc["name"] for doc in body["data"]["documents"]] == ["invoice.pdf"]
+    assert "Finance folder has 1 file" in body["speak"]
+
+
+def test_where_is_file_reports_folder_and_date(login_as, make_document):
+    vault, user = login_as()
+    make_document(user.id, name="passport.pdf", folder="Identity")
+    body = vault.voice("where is my passport").get_json()
+    assert body["intent"] == "document_info"
+    assert "passport.pdf" in body["speak"]
+    assert "Identity" in body["speak"]
+
+
+def test_small_talk_is_answered(login_as):
+    vault, _user = login_as()
+    body = vault.voice("hello").get_json()
+    assert body["intent"] == "small_talk"
+    assert body["status"] == "ok"
+
+
+def test_how_to_question_is_answered(login_as):
+    vault, _user = login_as()
+    body = vault.voice("how do I upload a file").get_json()
+    assert body["intent"] == "faq"
+    assert "Add files" in body["speak"]
+
+
+def test_active_share_question_is_answered(login_as):
+    vault, _user = login_as()
+    body = vault.voice("what shares do I have").get_json()
+    assert body["intent"] == "list_shares"
+    assert "no active share links" in body["speak"].lower()
+
+
 def test_open_trash_and_shares_actions(login_as):
     vault, _user = login_as()
     assert vault.voice("show the trash").get_json()["client_action"]["type"] == "open_trash"

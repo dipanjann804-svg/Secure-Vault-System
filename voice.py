@@ -290,6 +290,55 @@ def _list_line(doc):
     return f"{doc.original_filename} ({doc.folder})"
 
 
+def _match_folder(query, names=None):
+    """Best folder for a spoken name, plus the full folder list."""
+    names = _folder_names() if names is None else names
+    query = (query or "").strip()
+    if not query:
+        return None, names
+    lowered = query.lower()
+    exact = next((name for name in names if name.lower() == lowered), None)
+    if exact:
+        return exact, names
+    partial = [name for name in names if lowered in name.lower()]
+    if len(partial) == 1:
+        return partial[0], names
+    return None, names
+
+
+def _human_size(value):
+    """A spoken file size, or a plain phrase when it is unknown."""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return "an unknown size"
+    if value <= 0:
+        return "an unknown size"
+    for unit, size in (("gigabytes", 1024 ** 3), ("megabytes", 1024 ** 2), ("kilobytes", 1024)):
+        if value >= size:
+            return f"{value / size:.1f} {unit}"
+    return f"{value} byte{'s' if value != 1 else ''}"
+
+
+def _share_label(link, names):
+    if link.share_kind == "folder" or (not link.document_id and link.folder):
+        return f"the {link.folder or 'shared'} folder"
+    return names.get(link.document_id) or "a deleted file"
+
+
+def _share_uses(link):
+    if link.max_uses is None:
+        return "unlimited downloads"
+    left = max(0, int(link.max_uses) - int(link.use_count or 0))
+    return f"{left} of {link.max_uses} downloads left"
+
+
+def _share_expiry(link):
+    if link.expires_at is None:
+        return "no expiry"
+    return "expires " + link.expires_at.strftime("%d %B %Y")
+
+
 def _summary_payload():
     docs = Document.query.filter_by(user_id=current_user.id, deleted_at=None).count()
     notes = Note.query.filter_by(user_id=current_user.id).count()
@@ -408,19 +457,13 @@ def _handle_read(plan, ctx):
     if intent == "open_folder":
         query = (plan.get("folder_query") or "").strip()
         names = _folder_names()
+        if not names:
+            return _response("You do not have any folders yet.")
         if not query:
-            if not names:
-                return _response("You do not have any folders yet.")
             return _response(
                 "Which folder? Your folders are: " + "; ".join(names) + "."
             )
-        if not names:
-            return _response("You do not have any folders yet.")
-        match = next((name for name in names if name.lower() == query.lower()), None)
-        if not match:
-            matches = [name for name in names if query.lower() in name.lower()] if query else []
-            if len(matches) == 1:
-                match = matches[0]
+        match, names = _match_folder(query, names)
         if not match:
             return _response(
                 f"I couldn't find a folder named {query}. Your folders are: "
@@ -458,6 +501,122 @@ def _handle_read(plan, ctx):
             "Saved contacts: " + "; ".join(names) + ".",
             data={"contacts": [{"id": contact.id, "name": contact.name} for contact in contacts]},
         )
+
+    if intent == "list_folder_contents":
+        query = (plan.get("folder_query") or "").strip()
+        match, names = _match_folder(query)
+        if not names:
+            return _response("You do not have any folders yet.")
+        if not query:
+            return _response("Which folder? Your folders are: " + "; ".join(names) + ".")
+        if not match:
+            return _response(
+                f"I couldn't find a folder named {query}. Your folders are: "
+                + "; ".join(names) + "."
+            )
+        docs = Document.query.filter(
+            Document.user_id == current_user.id,
+            Document.deleted_at.is_(None),
+            func.lower(Document.folder) == match.lower(),
+        ).order_by(Document.created_at.desc()).all()
+        if not docs:
+            return _response(f"The {match} folder is empty.")
+        _remember_documents(ctx, docs, intent)
+        lines = [
+            f"The {match} folder has {len(docs)} file{'s' if len(docs) != 1 else ''}. "
+            "The most recent are: " + "; ".join(_list_line(doc) for doc in docs[:5]) + "."
+        ]
+        return _response(" ".join(lines), "\n".join(lines), data={
+            "documents": [
+                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+                for doc in docs[:10]
+            ],
+            "folder": match,
+        })
+
+    if intent == "document_info":
+        query = plan.get("document_query") or ""
+        docs = _find_documents(query, ctx)
+        if not docs:
+            suggestions = _suggest_documents(query)
+            if suggestions:
+                return _response(
+                    f"I couldn't find a file matching {query}. Did you mean: "
+                    + "; ".join(suggestions) + "?",
+                    data={"documents": [], "suggestions": suggestions},
+                )
+            recent = _document_names(limit=5)
+            if recent:
+                return _response(
+                    f"I couldn't find a file matching {query}. Your files are: "
+                    + "; ".join(recent) + ".",
+                    data={"documents": [], "suggestions": recent},
+                )
+            return _response(f"I couldn't find a file matching {query}.")
+        if len(docs) > 1:
+            _remember_documents(ctx, docs, intent)
+            names = "; ".join(_list_line(doc) for doc in docs[:5])
+            return _response(
+                f"I found several matches: {names}. Which one do you mean?",
+                data={"documents": [
+                    {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+                    for doc in docs
+                ]},
+            )
+        doc = docs[0]
+        _remember_documents(ctx, docs, intent)
+        added = doc.created_at.strftime("%d %B %Y") if doc.created_at else "an unknown date"
+        speak = (
+            f"{doc.original_filename} is in the {doc.folder} folder, "
+            f"{_human_size(doc.file_size)}, added on {added}."
+        )
+        return _response(speak, data={
+            "documents": [
+                {"id": doc.id, "name": doc.original_filename, "folder": doc.folder}
+            ],
+            "folder": doc.folder,
+            "size": doc.file_size,
+        })
+
+    if intent == "list_shares":
+        links = ShareLink.query.filter(
+            ShareLink.user_id == current_user.id,
+            ShareLink.revoked_at.is_(None),
+            or_(ShareLink.expires_at.is_(None), ShareLink.expires_at > _now()),
+            or_(ShareLink.max_uses.is_(None), ShareLink.use_count < ShareLink.max_uses),
+        ).order_by(ShareLink.created_at.desc()).all()
+        if not links:
+            return _response("You have no active share links.")
+        doc_ids = [link.document_id for link in links if link.document_id]
+        names = {}
+        if doc_ids:
+            rows = Document.query.filter(
+                Document.user_id == current_user.id,
+                Document.id.in_(doc_ids),
+            ).all()
+            names = {doc.id: doc.original_filename for doc in rows}
+        parts = [
+            f"{_share_label(link, names)} for {link.recipient_name or 'a recipient'}, "
+            f"{_share_uses(link)}, {_share_expiry(link)}"
+            for link in links[:5]
+        ]
+        speak = (
+            f"You have {len(links)} active share link{'s' if len(links) != 1 else ''}. "
+            + "; ".join(parts) + "."
+        )
+        return _response(speak, data={
+            "shares": [
+                {
+                    "id": link.id,
+                    "label": _share_label(link, names),
+                    "recipient": link.recipient_name,
+                    "uses": _share_uses(link),
+                    "expiry": _share_expiry(link),
+                }
+                for link in links[:10]
+            ],
+            "active_count": len(links),
+        })
 
     if intent == "open_trash":
         return _response(

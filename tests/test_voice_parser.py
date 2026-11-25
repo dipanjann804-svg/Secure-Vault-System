@@ -83,6 +83,86 @@ def test_polite_confirmation_still_confirms():
     assert parse_voice_command("yes please")["intent"] == "confirm"
 
 
+def test_small_talk_gets_a_friendly_answer():
+    for text in ("hello", "Hi there", "thank you", "how are you", "who are you", "okay"):
+        plan = parse_voice_command(text)
+        assert plan["intent"] == "small_talk", text
+        assert plan["tier"] == TIER_READ, text
+        assert plan["speak"], text
+
+
+def test_how_to_questions_get_a_direct_answer():
+    for text in (
+        "how do I upload a file",
+        "how can I share a file",
+        "how do I add a contact",
+        "how do I restore a deleted file",
+        "is my vault secure",
+        "how do I create a note",
+        "where do I download my file",
+        "how do I change my password",
+    ):
+        plan = parse_voice_command(text)
+        assert plan["intent"] == "faq", text
+        assert plan["tier"] == TIER_READ, text
+
+
+def test_password_how_to_explains_the_interface():
+    plan = parse_voice_command("how do I change my password")
+    assert plan["intent"] == "faq"
+    assert "Change password" in plan["speak"]
+
+
+def test_account_deletion_how_to_explains_the_interface():
+    plan = parse_voice_command("how do I delete my account")
+    assert plan["intent"] == "faq"
+    assert "Settings" in plan["speak"]
+
+
+def test_vault_questions_map_to_read_only_answers():
+    cases = {
+        "what files do I have": "list_documents",
+        "show my recent files": "list_documents",
+        "which folders do I have": "list_folders",
+        "what notes do I have": "list_notes",
+        "who are my contacts": "list_contacts",
+        "what shares do I have": "list_shares",
+        "what's in my Finance folder": "list_folder_contents",
+        "where is my passport": "document_info",
+        "which folder is passport in": "document_info",
+        "when did I upload passport": "document_info",
+        "how big is passport": "document_info",
+        "what did I add recently": "list_documents",
+        "do I have a file called passport": "search_documents",
+        "where is the Finance folder": "open_folder",
+    }
+    for text, intent in cases.items():
+        plan = parse_voice_command(text)
+        assert plan["intent"] == intent, text
+        assert plan["tier"] == TIER_READ, text
+
+
+def test_folder_contents_extracts_the_folder_name():
+    assert parse_voice_command("what's in my Finance folder")["folder_query"] == "Finance"
+
+
+def test_document_details_extract_the_file_name():
+    assert parse_voice_command("where is my passport")["document_query"] == "passport"
+
+
+def test_reading_a_note_aloud_is_blocked():
+    plan = parse_voice_command("read my note titled Passwords")
+    assert plan["intent"] == "blocked"
+    assert plan["blocked_reason"] == "note_content"
+
+
+def test_unmatched_question_falls_back_to_its_topic():
+    plan = parse_voice_command("the folder situation")
+    assert plan["intent"] == "list_folders"
+    assert plan["tier"] == TIER_READ
+    assert parse_voice_command("make me a sandwich")["intent"] == "unknown"
+
+
 def test_open_trash_is_allowed_but_delete_is_blocked():
     assert parse_voice_command("show the trash")["intent"] == "open_trash"
     blocked = parse_voice_command("empty the trash")
