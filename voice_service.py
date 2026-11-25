@@ -272,6 +272,17 @@ def _small_talk_reply(text):
     return _plan("small_talk", TIER_READ, "voice_small_talk", speech)
 
 
+def _build_greeting(match, _text):
+    """Answer a greeting with the same greeting, then offer help."""
+    return _plan(
+        "small_talk", TIER_READ, "voice_small_talk",
+        _greeting_lead(match.group(0))
+        + " Tap the microphone and ask me to list or search files, open a file "
+        "or folder, summarize your vault, list notes, contacts, or shares, "
+        "create a note, or prepare a share.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Small talk: a complete utterance, matched against the whole transcript.
 # ---------------------------------------------------------------------------
@@ -285,6 +296,7 @@ _SMALL_TALK_TOOLS = (
             r"^(?:hi|hello|hey|yo|good morning|good afternoon|good evening)"
             r"(?:\s+(?:there|buffy|vault))?$",
         ),
+        build=_build_greeting,
     ),
     Tool(
         "small_talk", "voice_small_talk", "You're welcome.",
