@@ -188,6 +188,51 @@ def _blocked(speak, reason="blocked"):
     )
 
 
+# ---------------------------------------------------------------------------
+# Public plan builders.
+#
+# The conversational layer (``ai/``) never invents a handler: it selects a tool
+# from a fixed catalogue and the route layer calls one of these builders. The
+# result is an ordinary plan, so the same tier checks, owner scoping and
+# confirmation flow apply as for a deterministically parsed command.
+# ---------------------------------------------------------------------------
+def plan_from_tool_call(intent, tier, audit_tool, speech, params=None, action=None):
+    """Assemble a plan for a validated tool call."""
+    extra = dict(params or {})
+    if action:
+        extra["client_action"] = dict(action)
+    if intent == "share_document":
+        # The prepare handler speaks human labels; never let a model supply them.
+        expiry = extra.get("expiry") or "1h"
+        usage = extra.get("usage") or "once"
+        extra["expiry"] = expiry
+        extra["usage"] = usage
+        extra["expiry_label"] = _EXPIRY_LABELS.get(expiry, expiry)
+        extra["usage_label"] = _USAGE_LABELS.get(usage, usage)
+    return _plan(intent, tier, audit_tool, speech, **extra)
+
+
+def blocked_plan(message, reason="forbidden_action"):
+    """A refusal the conversational layer is allowed to produce."""
+    return _blocked(message, reason)
+
+
+def clarify_plan(speech):
+    return _plan("clarify", TIER_READ, "voice_clarify", speech)
+
+
+def limit_plan(speech):
+    return _plan("limit", TIER_READ, "voice_limit", speech)
+
+
+def answer_plan(speech, display=None):
+    """A conversational answer: short spoken form, fuller on-screen form."""
+    return _plan(
+        "general_answer", TIER_READ, "voice_general_answer",
+        speech, display=display or speech,
+    )
+
+
 @dataclass(frozen=True)
 class Tool:
     """One capability and every phrasing that reaches it.
@@ -453,6 +498,12 @@ _BLOCKED_PATTERNS = (
         r"\b(show|reveal|tell|read)\b.*\b(password|secret|key)\b",
         "I cannot reveal passwords or encryption secrets.",
         "forbidden_action",
+    ),
+    (
+        r"\bpassword\s+(?:is|equals)\b|\bmy\s+password\b",
+        "I never take, store, or repeat a password by voice. Change it in "
+        "Settings, where the field is masked.",
+        "secret_leak",
     ),
     (
         r"\b(?:read|speak|recite)\b.*\bnotes?\b"
@@ -1109,6 +1160,12 @@ _FALLBACK_TOOLS = (
     ),
 )
 
+_EMAIL_BLOCK_SPEECH = (
+    "I can only share with a saved contact. I never accept an email address "
+    "by voice. Add the person in Settings first, then ask me to share with "
+    "their saved contact name."
+)
+
 _EMPTY_SPEECH = "I didn't hear anything. Tap the microphone and try again."
 _LOST_SPEECH = (
     "I didn't catch a command I know. Name the file or folder you mean, or say "
@@ -1119,6 +1176,29 @@ _UNANSWERED_SPEECH = (
     "and I won't guess. Ask me about your files, folders, notes, contacts, or "
     "shares, or say help."
 )
+
+
+def precheck_block(text: str):
+    """The refusal guard, decided before any model call.
+
+    The conversational layer must never be the thing that decides whether an
+    imperative is safe. This runs first, so a dictated email address or a
+    destructive instruction is refused locally and never leaves the server.
+    """
+    original = normalize_transcript(text)
+    if not original:
+        return None
+    if _EMAIL_RE.search(original):
+        return _blocked(_EMAIL_BLOCK_SPEECH, "dictated_email")
+    stripped = _strip_lead_ins(original)
+    if not stripped:
+        return None
+    low = stripped.lower()
+    # Navigation runs before the refusal guard, exactly as in the planner, so
+    # "show the trash" stays available while "empty the trash" is refused.
+    if _match_tools(_NAV_TOOLS, low) is not None:
+        return None
+    return _check_blocked(low)
 
 
 def _ensure_answer(plan):
@@ -1153,12 +1233,7 @@ def parse_voice_command(text: str):
 def _plan_transcript(original: str):
     """The answer ladder: vault operation, knowledge, clarify, limit, fallback."""
     if _EMAIL_RE.search(original):
-        return _blocked(
-            "I can only share with a saved contact. I never accept an email "
-            "address by voice. Add the person in Settings first, then ask me "
-            "to share with their saved contact name.",
-            "dictated_email",
-        )
+        return _blocked(_EMAIL_BLOCK_SPEECH, "dictated_email")
 
     # A greeting is a complete utterance, so answer it before the polite
     # padding is stripped away.

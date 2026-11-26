@@ -35,6 +35,11 @@ os.environ["ENCRYPTION_KEY"] = base64.urlsafe_b64encode(
 os.environ["WTF_CSRF_TIME_LIMIT"] = "3600"
 os.environ["VOICE_RATE_LIMIT"] = "20"
 os.environ["VOICE_RATE_WINDOW_SECONDS"] = "60"
+# The conversational layer must never reach the network during tests. An empty
+# key also stops a developer's local .env from being used, because python-dotenv
+# does not override variables that are already set.
+os.environ["GEMINI_ENABLED"] = "true"
+os.environ["GEMINI_API_KEY"] = ""
 
 import pytest  # noqa: E402
 from werkzeug.security import generate_password_hash  # noqa: E402

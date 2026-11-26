@@ -19,7 +19,7 @@ A Flask web app for storing personal documents and notes securely. Files are org
 - **Encrypted notepad** — notes encrypted with Fernet (AES) before storage, decrypted on read; download as `.txt`, single + batch delete
 - **Expiring, protected share links** — revocable single-file or frozen-folder links with optional password gates, one-time/multi-use limits and access history
 - **Saved contacts** — owner-entered recipients for share links; voice can select them but never accepts a dictated email address
-- **Tap-to-talk voice assistant** — optional English (`en-US`) microphone panel. Read-only commands run immediately; note creation and sharing require confirmation; delete, password, upload and outbound-email actions are refused. Every question gets an answer: vault tools first, then built-in app knowledge, then a computed answer (arithmetic, date and time), a clarifying question when the request is vague, or a plain statement of the limit — it never invents one. No audio or full transcript is stored
+- **Gemini-powered voice assistant** — optional English (`en-US`) microphone panel. General and technical questions, explanations and vault help are answered by Google Gemini; vault requests are routed to allowlisted backend tools, read-only ones running immediately and mutations only after an explicit confirmation. Delete, password, upload and outbound-email actions are refused. Without a Gemini key (or on any provider failure) it falls back to the deterministic planner, which still answers vault commands, arithmetic and the clock, asks a clarifying question when the request is vague, and states the limit instead of inventing an answer. No audio or full transcript is stored
 - **Profile management** — name, phone, date of birth, gender, location, avatar upload
 - **Security logging** — login attempts and voice/share actions recorded with IP + user agent; voice audit rows never contain transcripts or note text
 - **CSRF protection** — every POST, including JSON `fetch()` calls, requires a Flask-WTF token
@@ -50,6 +50,17 @@ Secure-Vault-System/
 ├── models.py            # User, Document, Note, Contact, ShareLink, VoiceContext, SecurityLog models
 ├── voice.py             # Voice API routes, tool handlers, pending-action state, audit + rate limiting
 ├── voice_service.py     # Tool registry (each tool owns its phrasings and safety tier) + answer ladder
+├── ai/                  # Conversational layer: the model proposes, Flask decides
+│   ├── llm_service.py   # Env config + decide() entry point (never raises)
+│   ├── gemini_provider.py   # google-genai client, timeout, retries, error codes
+│   ├── provider_base.py     # Interface a second LLM would implement
+│   ├── schemas.py           # Categories, tool catalogue, strict validation
+│   ├── prompt_manager.py    # System instruction + prompt assembly
+│   ├── response_parser.py   # JSON extraction; malformed output is rejected
+│   ├── request_router.py    # Validated proposal -> existing deterministic plan
+│   ├── knowledge_retriever.py  # Local RAG corpus and retrieval
+│   ├── conversation_manager.py # Short-lived per-user turns and references
+│   └── knowledge/vault_knowledge.md  # Verified application facts (RAG source)
 ├── encryption.py        # Fernet encrypt_note / decrypt_note helpers
 ├── email_service.py     # password-reset and share email sender (Resend / Brevo / SMTP)
 ├── config.py            # Config class (SECRET_KEY, DB, mail settings)
@@ -128,6 +139,7 @@ python -m pytest tests -q
 | `test_voice_parser.py` | Intent parsing and the read-only / confirm / blocked tiers |
 | `test_voice_api.py` | `/voice/state`, command, confirm and cancel responses |
 | `test_voice_security.py` | CSRF, owner scoping, nonce replay and expiry, rate limits |
+| `test_ai_assistant.py` | Gemini provider contract, routing validation, RAG grounding, conversation memory, every fallback path |
 | `test_regression.py` | Existing vault routes still behave |
 | `test_migration.py` | `_sync_schema()` upgrades an old `app.db` without losing rows |
 
@@ -151,8 +163,15 @@ python -m pytest tests -q
 | `VOICE_RATE_WINDOW_SECONDS` | No | Voice rate-limit window in seconds (default `60`, minimum `30`) |
 | `VOICE_PENDING_TTL_SECONDS` | No | Seconds a voice confirmation stays valid (default `300`, minimum `60`) |
 | `VOICE_CONTEXT_TTL_SECONDS` | No | Seconds the short document-reference context is kept (default `1800`, minimum `300`) |
+| `VOICE_HISTORY_TURNS` | No | Conversation turns kept per user (default `6`, maximum `12`) |
+| `VOICE_AI_METADATA` | No | Vault metadata sent to Gemini: `names` (default), `counts`, or `none` |
+| `GEMINI_API_KEY` | For general answers | Google Gemini API key. Without it the assistant answers vault commands only |
+| `GEMINI_MODEL` | No | Gemini model id (default `gemini-3.8-flash`) |
+| `GEMINI_TIMEOUT` | No | Per-request timeout in seconds (default `20`, range 3–60) |
+| `GEMINI_ENABLED` | No | `false` disables every model call (default `true`) |
+| `GEMINI_MAX_RETRIES` | No | Retries for transient failures (default `2`, maximum `4`) |
 
-Voice commands do not need an external LLM or provider key. Speech recognition and playback stay in the browser; the server receives recognized text only.
+Speech recognition and playback stay in the browser; the server receives recognized text only. A Gemini key is optional: without one, every vault command still works and general questions get an honest "I can't answer that" instead of a guess.
 
 ## Routes
 
@@ -322,6 +341,79 @@ Open the **🎙 Voice** button. The panel starts at *"Tap to talk"* with the sta
 | "Microphone access is blocked. Allow it in the browser and try again." | Site permission denied — allow the mic, then reload |
 | "I didn't catch a command I know. Say help to hear what I can do." | Misheard; the transcript bubble shows what the browser sent |
 | "I'm getting too many requests. Please wait a minute and try again." | Rate limit hit (`VOICE_RATE_LIMIT` per `VOICE_RATE_WINDOW_SECONDS`) |
+
+## Conversational AI (Gemini)
+
+The assistant is powered by Google Gemini through the official `google-genai`
+SDK. Flask stays the security and execution authority: the model only ever
+*proposes* a category and, for vault requests, one tool from a fixed catalogue.
+The backend validates that proposal and runs it through the same handlers, owner
+checks, rate limits and confirmation flow as a parsed command.
+
+### Request routing
+
+| Category | Handled by |
+|---|---|
+| `VAULT_TOOL` | Allowlisted tool → existing handler, owner-scoped |
+| `FOLLOW_UP` | Same as `VAULT_TOOL`, resolved against the short-lived context |
+| `GENERAL_KNOWLEDGE` | Gemini answer: short spoken form, fuller on-screen form |
+| `TECHNICAL_KNOWLEDGE` | Gemini answer |
+| `VAULT_HELP` | Gemini, grounded in `ai/knowledge/vault_knowledge.md` |
+| `CURRENT_INFORMATION` | Never answered — no search provider is configured |
+| `CLARIFICATION` | One specific question back to the user |
+| `REFUSED` | Refusal text; no tool runs |
+
+Every `/voice/command` response also carries `request_category`, `response_text`,
+`tool_name`, `tool_result`, `requires_confirmation`, `clarification_question`,
+`error_code` and an `ai` block (`state`, `error_code`, `model`, `latency_ms`).
+The existing `status`/`speak`/`display` fields are unchanged for compatibility.
+
+### What the model may not do
+
+- Name a tool outside `ai/schemas.py`, or supply a parameter the tool does not
+  declare. Unknown keys (`user_id`, `owner`, …) are a hard error, not ignored.
+- Mark a mutation as read-only. The tier comes from the backend catalogue, so a
+  share or a note still requires an explicit confirmation.
+- Reach another account. Every handler filters on `current_user.id`.
+- Answer live questions. `CURRENT_INFORMATION` is replaced with an honest limit.
+- See a dictated note body or a spoken password. Note creation is handled
+  locally, and password statements are refused before any model call.
+
+### Privacy
+
+`VOICE_AI_METADATA` controls what owner-scoped metadata reaches a prompt:
+`names` (default: counts, folder names, recent filenames, saved contact names),
+`counts` (no names), or `none` (nothing). Note contents, email addresses,
+passwords, keys and file bytes are never sent. Conversation memory keeps at most
+six short turns in the existing `VoiceContext` row, expires with
+`VOICE_CONTEXT_TTL_SECONDS`, is scoped to one user, and stores no audio and no
+full transcript. Dictated note text is redacted before it is remembered.
+
+### When Gemini is unavailable
+
+No key, `GEMINI_ENABLED=false`, a timeout, a rate limit, an invalid key, a
+malformed response or an unknown tool all fall back to the deterministic
+planner. Vault commands keep working, arithmetic and the clock are still
+answered, and everything else gets a plain statement of the limit. `ai.state` and
+`ai.error_code` tell the UI and the audit trail which path answered.
+
+### Setup
+
+```powershell
+pip install -r requirements.txt      # adds google-genai
+# Put your key in .env (never commit it):
+#   GEMINI_API_KEY=your_api_key
+#   GEMINI_MODEL=gemini-3.8-flash
+#   GEMINI_TIMEOUT=20
+#   GEMINI_ENABLED=true
+python app.py
+```
+
+The key is read on the server only. It is never sent to the browser, never
+logged, and never included in a response. `GET /voice/state` reports the
+provider state (`ready`, `disabled`, `unconfigured`) without any credential.
+
+---
 
 ## Feature design notes
 

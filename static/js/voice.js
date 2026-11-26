@@ -3,6 +3,10 @@
  * Speech recognition and speech synthesis stay in the browser (en-US). Only
  * the recognized text is sent to the server. The UI never offers a text box
  * for commands, and the server requires an explicit Confirm before mutations.
+ *
+ * Visual states: IDLE, LISTENING, PROCESSING, SPEAKING,
+ * WAITING_FOR_CONFIRMATION, ERROR. Speaking can be interrupted at any time by
+ * tapping the microphone again, and the last answer can be repeated.
  */
 (function () {
   'use strict';
@@ -14,6 +18,9 @@
   const micBtn = document.getElementById('voiceMicBtn');
   const micLabel = document.getElementById('voiceMicLabel');
   const statusEl = document.getElementById('voiceStatus');
+  const stateEl = document.getElementById('voiceState');
+  const stopBtn = document.getElementById('voiceStopBtn');
+  const repeatBtn = document.getElementById('voiceRepeatBtn');
   const log = document.getElementById('voiceLog');
   const pendingBox = document.getElementById('voicePending');
   const pendingText = document.getElementById('voicePendingText');
@@ -22,28 +29,55 @@
 
   if (!panel || !fab || !micBtn) return;
 
+  const STATE_LABELS = {
+    IDLE: 'Idle',
+    LISTENING: 'Listening',
+    PROCESSING: 'Processing',
+    SPEAKING: 'Speaking',
+    WAITING_FOR_CONFIRMATION: 'Awaiting confirmation',
+    ERROR: 'Error'
+  };
+
   let recognition = null;
   let listening = false;
   let processing = false;
   let sentThisTurn = false;
   let pending = null;
+  let lastSpoken = '';
 
   function setStatus(text) {
-    statusEl.textContent = text;
+    if (statusEl) statusEl.textContent = text;
   }
 
-  function setMicUi(state) {
-    micBtn.classList.toggle('listening', state === 'listening');
-    if (state === 'listening') {
+  function setState(state) {
+    const key = STATE_LABELS[state] ? state : 'IDLE';
+    panel.setAttribute('data-voice-state', key);
+    if (stateEl) {
+      stateEl.setAttribute('data-state', key);
+      stateEl.textContent = STATE_LABELS[key];
+    }
+    micBtn.classList.toggle('listening', key === 'LISTENING');
+    micBtn.classList.toggle('processing', key === 'PROCESSING');
+    micBtn.classList.toggle('speaking', key === 'SPEAKING');
+    if (key === 'LISTENING') {
       micLabel.textContent = 'Listening… tap to stop';
       micBtn.setAttribute('aria-label', 'Stop listening');
-    } else if (state === 'processing') {
+    } else if (key === 'PROCESSING') {
       micLabel.textContent = 'Thinking…';
       micBtn.setAttribute('aria-label', 'Processing voice command');
+    } else if (key === 'SPEAKING') {
+      micLabel.textContent = 'Speaking… tap to interrupt';
+      micBtn.setAttribute('aria-label', 'Interrupt the assistant and speak');
     } else {
       micLabel.textContent = 'Tap to talk';
       micBtn.setAttribute('aria-label', 'Start listening');
     }
+    if (stopBtn) stopBtn.disabled = key !== 'SPEAKING';
+    if (repeatBtn) repeatBtn.disabled = !lastSpoken;
+  }
+
+  function idleState() {
+    setState(pending ? 'WAITING_FOR_CONFIRMATION' : 'IDLE');
   }
 
   function appendMessage(role, text, extraClass) {
@@ -86,14 +120,35 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  function stopSpeaking() {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (!processing && !listening) idleState();
+  }
+
   function speak(text) {
-    if (!text || !window.speechSynthesis) return;
-    const utter = new SpeechSynthesisUtterance(String(text).slice(0, 600));
+    if (!text) return;
+    lastSpoken = String(text).slice(0, 600);
+    if (repeatBtn) repeatBtn.disabled = false;
+    if (!window.speechSynthesis) return;
+    const utter = new SpeechSynthesisUtterance(lastSpoken);
     utter.lang = 'en-US';
     utter.rate = 1.02;
     utter.pitch = 1;
     window.speechSynthesis.cancel();
+    utter.onend = () => {
+      if (!processing && !listening) idleState();
+    };
+    utter.onerror = () => {
+      if (!processing && !listening) idleState();
+    };
+    setState('SPEAKING');
     window.speechSynthesis.speak(utter);
+  }
+
+  function repeatLast() {
+    if (!lastSpoken) return;
+    appendMessage('assistant', lastSpoken);
+    speak(lastSpoken);
   }
 
   function setPending(value) {
@@ -103,9 +158,11 @@
         pending.summary +
         (pending.expires_in ? ' Confirm within ' + pending.expires_in + ' seconds.' : '');
       pendingBox.classList.add('open');
+      if (!processing && !listening) setState('WAITING_FOR_CONFIRMATION');
     } else {
       pendingText.textContent = '';
       pendingBox.classList.remove('open');
+      if (!processing && !listening) setState('IDLE');
     }
   }
 
@@ -113,19 +170,23 @@
     processing = value;
     micBtn.disabled = value;
     if (value) {
-      setMicUi('processing');
+      setState('PROCESSING');
       setStatus('Checking that with your vault…');
     } else {
-      setMicUi('idle');
-      if (!listening) setStatus('Ready. Microphone stays off until you tap.');
+      micBtn.disabled = false;
+      if (!listening) {
+        idleState();
+        setStatus('Ready. Microphone stays off until you tap.');
+      }
     }
   }
 
   function applyServerResponse(data, httpStatus) {
     const status = data.status || 'error';
-    const display = data.display || data.speak || 'Something went wrong.';
+    const display = data.display || data.response_text || data.speak || 'Something went wrong.';
     if (status === 'error') {
       appendMessage('assistant', display, 'error');
+      setState('ERROR');
     } else if (status === 'blocked') {
       appendMessage('assistant', display, 'blocked');
     } else {
@@ -192,6 +253,7 @@
     } catch (err) {
       appendMessage('assistant', 'Network error. Please try again.', 'error');
       setStatus('Network error. Check your connection.');
+      setState('ERROR');
     } finally {
       setProcessing(false);
       sentThisTurn = false;
@@ -207,6 +269,7 @@
       applyServerResponse(data, res.status);
     } catch (err) {
       appendMessage('assistant', 'Network error. Please try again.', 'error');
+      setState('ERROR');
     } finally {
       setProcessing(false);
     }
@@ -223,6 +286,7 @@
       applyServerResponse(data, res.status);
     } catch (err) {
       appendMessage('assistant', 'Network error. Please try again.', 'error');
+      setState('ERROR');
     } finally {
       setProcessing(false);
     }
@@ -232,7 +296,12 @@
     try {
       const res = await fetch('/voice/state', { method: 'GET' });
       const data = await res.json().catch(() => ({}));
-      if (res.ok) setPending(data.pending || null);
+      if (res.ok) {
+        setPending(data.pending || null);
+        if (data.ai && data.ai.state && data.ai.state !== 'ready') {
+          setStatus('Assistant ready. General questions need a Gemini key; vault commands work offline.');
+        }
+      }
     } catch (e) {}
   }
 
@@ -245,6 +314,7 @@
   function buildRecognition() {
     if (!SpeechRecognition) {
       micBtn.disabled = true;
+      setState('ERROR');
       setStatus('Speech recognition is not available in this browser. Use Chrome or Edge.');
       return null;
     }
@@ -257,7 +327,7 @@
     rec.onstart = () => {
       listening = true;
       sentThisTurn = false;
-      setMicUi('listening');
+      setState('LISTENING');
       setStatus('Listening… speak now.');
     };
 
@@ -279,6 +349,7 @@
 
     rec.onerror = (event) => {
       const code = event.error || '';
+      setState('ERROR');
       if (code === 'no-speech') {
         setStatus('I didn’t hear anything. Tap the mic and try again.');
       } else if (code === 'not-allowed' || code === 'service-not-allowed') {
@@ -289,6 +360,7 @@
         setStatus('The browser speech service is offline. Check your connection.');
       } else if (code === 'aborted') {
         setStatus('Stopped listening.');
+        idleState();
       } else {
         setStatus('Speech recognition failed. Please try again.');
       }
@@ -297,7 +369,7 @@
     rec.onend = () => {
       listening = false;
       if (!processing) {
-        setMicUi('idle');
+        idleState();
         if (statusEl.textContent.startsWith('Listening')) {
           setStatus('Ready. Microphone stays off until you tap.');
         }
@@ -336,16 +408,21 @@
       stopListening();
       return;
     }
+    // Tapping the mic while the assistant is speaking interrupts it and starts
+    // a new question immediately.
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     if (!recognition) recognition = buildRecognition();
     if (!recognition) return;
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
     try {
       recognition.start();
       setStatus('Starting microphone…');
     } catch (err) {
       setStatus('Could not start the microphone. Try again.');
+      setState('ERROR');
     }
   });
+  if (stopBtn) stopBtn.addEventListener('click', stopSpeaking);
+  if (repeatBtn) repeatBtn.addEventListener('click', repeatLast);
   confirmBtn.addEventListener('click', confirmPending);
   cancelBtn.addEventListener('click', cancelPending);
 
@@ -354,4 +431,5 @@
   });
 
   recognition = buildRecognition();
+  setState('IDLE');
 })();

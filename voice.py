@@ -14,6 +14,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -24,14 +25,19 @@ from sqlalchemy import func, or_
 
 from encryption import decrypt_note, encrypt_note
 from models import Contact, Document, Note, ShareLink, SecurityLog, VoiceContext, db
+from ai import conversation_manager, knowledge_retriever, llm_service, request_router
 from voice_service import (
+    TIER_CONFIRM,
+    TIER_SENSITIVE,
     VOICE_CONTEXT_TTL_SECONDS,
     VOICE_LANGUAGE,
     VOICE_PENDING_TTL_SECONDS,
     VOICE_RATE_LIMIT,
     VOICE_RATE_WINDOW_SECONDS,
+    answer_plan,
     normalize_transcript,
     parse_voice_command,
+    precheck_block,
 )
 
 
@@ -89,8 +95,14 @@ def _context_data(ctx):
 
 
 def _remember_documents(ctx, docs, intent):
+    """Keep the last result set, preserving conversation turns."""
     ids = [doc.id for doc in docs][:10]
-    ctx.context_json = json.dumps({"last_document_ids": ids, "last_intent": intent})
+    data = _context_data(ctx)
+    conversation_manager.remember_documents(
+        data, ids, [doc.original_filename for doc in docs]
+    )
+    conversation_manager.remember_intent(data, intent)
+    ctx.context_json = json.dumps(data)
     ctx.updated_at = _now()
 
 
@@ -366,7 +378,9 @@ def _summary_payload():
 # function and one line in READ_TOOLS below.
 # ---------------------------------------------------------------------------
 def _tool_speak(plan, _ctx):
-    return _response(plan["speak"])
+    # Conversational answers keep a short spoken form and a fuller on-screen
+    # form; every other plan sets display == speak.
+    return _response(plan["speak"], plan.get("display"))
 
 
 def _tool_vault_summary(_plan, _ctx):
@@ -700,6 +714,196 @@ def _handle_read(plan, ctx):
     return handler(plan, ctx)
 
 
+# ---------------------------------------------------------------------------
+# Conversational layer.
+#
+# The model proposes; this module decides. A proposal is routed into an ordinary
+# plan, which the handlers above execute with the same owner scoping, tier
+# checks, rate limits and confirmation flow as a parsed command. When the model
+# is unavailable, disabled, or returns something invalid, the deterministic
+# planner answers instead.
+# ---------------------------------------------------------------------------
+_CONTROL_RE = re.compile(
+    r"^(?:confirm|yes|yes please|go ahead|do it|cancel|no|never mind|nevermind|"
+    r"stop|forget it)$",
+    re.I,
+)
+
+# Dictated note bodies are never sent to a model. The deterministic planner
+# already understands "create a note titled X with content Y", and it keeps the
+# body on this server.
+_NOTE_RE = re.compile(r"\b(?:create|add|make|write|take)\s+(?:a\s+)?note\b", re.I)
+
+_HISTORY_RE = re.compile(
+    r"\b(?:what did i (?:ask|say)|what was my (?:last|previous) (?:question|request)|"
+    r"repeat my (?:last )?question)\b",
+    re.I,
+)
+
+_PLAN_CATEGORIES = {
+    "blocked": "REFUSED",
+    "clarify": "CLARIFICATION",
+    "ask_note": "CLARIFICATION",
+    "error": "CLARIFICATION",
+    "empty": "CLARIFICATION",
+    "limit": "CURRENT_INFORMATION",
+    "general_answer": "GENERAL_KNOWLEDGE",
+    "small_talk": "GENERAL_KNOWLEDGE",
+    "unknown": "GENERAL_KNOWLEDGE",
+    "faq": "VAULT_HELP",
+    "help": "VAULT_HELP",
+}
+
+
+def _category_for_plan(plan):
+    intent = (plan or {}).get("intent") or ""
+    return _PLAN_CATEGORIES.get(intent, "VAULT_TOOL")
+
+
+def _ai_metadata(settings):
+    """Owner-scoped facts the model may state. Never note bodies or emails."""
+    mode = getattr(settings, "metadata", "names")
+    if mode == "none":
+        return ""
+    docs = Document.query.filter_by(user_id=current_user.id, deleted_at=None).count()
+    notes = Note.query.filter_by(user_id=current_user.id).count()
+    contacts = Contact.query.filter_by(user_id=current_user.id).count()
+    active_links = ShareLink.query.filter(
+        ShareLink.user_id == current_user.id,
+        ShareLink.revoked_at.is_(None),
+        or_(ShareLink.expires_at.is_(None), ShareLink.expires_at > _now()),
+        or_(ShareLink.max_uses.is_(None), ShareLink.use_count < ShareLink.max_uses),
+    ).count()
+    folders = _folder_names()
+    lines = [
+        f"Live files: {docs}",
+        f"Notes: {notes}",
+        f"Saved contacts: {contacts}",
+        f"Active share links: {active_links}",
+        "Folders: " + (", ".join(folders) if folders else "none"),
+    ]
+    if mode == "names":
+        names = _document_names(limit=10)
+        if names:
+            lines.append("Recent file names: " + "; ".join(names))
+        contact_names = [
+            row[0]
+            for row in Contact.query.with_entities(Contact.name)
+            .filter_by(user_id=current_user.id)
+            .order_by(Contact.name.asc())
+            .limit(10)
+            .all()
+            if row[0]
+        ]
+        if contact_names:
+            lines.append("Saved contact names: " + "; ".join(contact_names))
+    return "\n".join(lines)
+
+
+def _ai_route(text, data, pending_summary=""):
+    """Ask the conversational layer, returning ``(route|None, info)``."""
+    service = llm_service.get_llm_service()
+    if not service.available:
+        return None, {"state": "disabled", "reason": service.status().get("reason")}
+
+    turns = conversation_manager.read_turns(data, VOICE_CONTEXT_TTL_SECONDS)
+    try:
+        knowledge = knowledge_retriever.format_for_prompt(
+            knowledge_retriever.retrieve(text)
+        )
+    except Exception:  # retrieval must never break a request
+        current_app.logger.exception("Voice knowledge retrieval failed")
+        knowledge = ""
+
+    decision = service.decide(
+        text=text,
+        history_text=conversation_manager.format_history(turns),
+        knowledge_text=knowledge,
+        metadata_text=_ai_metadata(service.settings),
+        pending_summary=pending_summary,
+    )
+    info = {
+        "state": "ok" if not decision.error_code else "error",
+        "error_code": decision.error_code or None,
+        "model": decision.model or service.model,
+        "latency_ms": decision.latency_ms,
+    }
+    if decision.error_code:
+        current_app.logger.info("Voice AI fallback: %s", decision.error_code)
+        return None, info
+
+    routed = request_router.route(decision, text=text)
+    if routed is None:
+        info["state"] = "error"
+        info["error_code"] = "unroutable_decision"
+        return None, info
+    info["category"] = routed.category
+    info["tool_name"] = routed.tool_name
+    return routed, info
+
+
+def _history_answer(text, turns):
+    """Answer "what did I ask earlier" without any model call."""
+    if not _HISTORY_RE.search(text):
+        return None
+    # The current utterance is stored only after it is answered, so the last
+    # recorded user turn is the earlier question.
+    previous = conversation_manager.last_user_question(turns, skip_latest=False)
+    if not previous:
+        return answer_plan(
+            "I don't have an earlier question in this session. Conversation "
+            "memory expires after a short time, and I never store a full "
+            "transcript."
+        )
+    return answer_plan(f"You asked: {previous}", f"You asked: {previous}")
+
+
+def _remember_exchange(ctx, text, plan, result):
+    """Store one short turn. Note bodies and emails are redacted first."""
+    data = _context_data(ctx)
+    conversation_manager.append_turn(
+        data, "user", text, VOICE_CONTEXT_TTL_SECONDS
+    )
+    conversation_manager.append_turn(
+        data, "assistant", (result or {}).get("speak") or "", VOICE_CONTEXT_TTL_SECONDS
+    )
+    conversation_manager.remember_intent(data, (plan or {}).get("intent") or "")
+    ctx.context_json = json.dumps(data)
+    ctx.updated_at = _now()
+
+
+def _envelope(result, plan, routed=None, ai_info=None):
+    """Add the standard response fields without breaking the existing ones."""
+    plan = plan or {}
+    payload = dict(result or {})
+    payload.setdefault("status", "ok")
+    payload["request_category"] = (
+        routed.category if routed is not None else _category_for_plan(plan)
+    )
+    payload["response_text"] = payload.get("display") or payload.get("speak") or ""
+    payload["tool_name"] = (
+        routed.tool_name if routed is not None else (plan.get("intent") or None)
+    )
+    payload["tool_result"] = (
+        payload.get("data") if isinstance(payload.get("data"), dict) else None
+    )
+    payload["requires_confirmation"] = bool(payload.get("pending")) and plan.get(
+        "tier"
+    ) in (TIER_CONFIRM, TIER_SENSITIVE)
+    payload["clarification_question"] = (
+        payload.get("speak") if plan.get("intent") == "clarify" else None
+    )
+    payload["error_code"] = None
+    if payload["status"] == "blocked":
+        payload["error_code"] = "refused"
+    elif payload["status"] == "error":
+        payload["error_code"] = "request_failed"
+    payload["intent"] = plan.get("intent") or payload.get("intent")
+    payload["tier"] = plan.get("tier")
+    payload["ai"] = ai_info or {"state": "skipped"}
+    return payload
+
+
 def _prepare_note(plan, ctx):
     title = plan.get("note_title") or "Voice note"
     content = plan.get("note_content") or ""
@@ -949,6 +1153,8 @@ def create_voice_blueprint(share_creator):
             "status": "ok",
             "language": VOICE_LANGUAGE,
             "pending": pending,
+            # Credential-free provider status for the panel and diagnostics.
+            "ai": llm_service.get_llm_service().status(),
         })
 
     @bp.route("/voice/command", methods=["POST"])
@@ -956,10 +1162,16 @@ def create_voice_blueprint(share_creator):
     def voice_command():
         data, error = _get_request_json()
         if error:
-            return jsonify({"status": "error", "message": error}), 400
+            return jsonify({
+                "status": "error", "message": error, "error_code": "bad_request",
+            }), 400
         text = normalize_transcript(str(data.get("text") or ""))
         if not text:
-            return jsonify({"status": "error", "message": "No speech text received."}), 400
+            return jsonify({
+                "status": "error",
+                "message": "No speech text received.",
+                "error_code": "empty_transcript",
+            }), 400
 
         ctx = _get_context()
         if _rate_limited(ctx):
@@ -968,49 +1180,87 @@ def create_voice_blueprint(share_creator):
             return jsonify(_response(
                 "I'm getting too many requests. Please wait a minute and try again.",
                 status="error",
+                error_code="rate_limited",
             )), 429
 
-        plan = parse_voice_command(text)
+        pending = _pending_state(ctx)
+        pending_summary = (pending or {}).get("summary") or ""
+
+        # 1. A refusal is decided locally, before any model call, so an unsafe
+        #    imperative or a dictated email address never leaves the server.
+        precheck = precheck_block(text)
+        if precheck is not None:
+            _audit(precheck.get("audit_tool") or "voice_blocked", "blocked", "FAILED")
+            db.session.commit()
+            result = _response(precheck["speak"], status="blocked")
+            return jsonify(_envelope(result, precheck))
+
+        # 2. Control words stay deterministic: "yes" must never be sent to a
+        #    model that could reinterpret it as a search.
+        routed = None
+        ai_info = {"state": "skipped"}
+        if _CONTROL_RE.match(text) or _NOTE_RE.search(text):
+            # Control words and dictated note text stay local by design.
+            if _NOTE_RE.search(text):
+                ai_info = {"state": "skipped", "reason": "note_body_stays_local"}
+            plan = parse_voice_command(text)
+        else:
+            routed, ai_info = _ai_route(text, _context_data(ctx), pending_summary)
+            if routed is not None:
+                plan = routed.plan
+            else:
+                # The conversational layer is unavailable or returned something
+                # unusable. The deterministic ladder still answers.
+                turns = conversation_manager.read_turns(
+                    _context_data(ctx), VOICE_CONTEXT_TTL_SECONDS
+                )
+                plan = _history_answer(text, turns) or parse_voice_command(text)
+
         intent = plan["intent"]
 
         if intent == "confirm":
             result = _confirm_action(data.get("nonce"), share_creator)
             db.session.commit()
-            return jsonify(result)
+            return jsonify(_envelope(result, plan, routed, ai_info))
 
         if intent == "cancel":
-            return jsonify(_cancel_pending(data.get("nonce")))
+            return jsonify(_envelope(_cancel_pending(data.get("nonce")), plan, routed, ai_info))
 
         if intent == "blocked":
             _audit(plan.get("audit_tool") or "voice_blocked", "blocked", "FAILED")
             db.session.commit()
-            return jsonify(_response(plan["speak"], status="blocked", intent=intent))
+            result = _response(plan["speak"], status="blocked")
+            return jsonify(_envelope(result, plan, routed, ai_info))
 
         if intent == "unknown":
             _audit("voice_unknown", "not_understood", "FAILED")
+            result = _response(plan["speak"], status="ok")
+            _remember_exchange(ctx, text, plan, result)
             db.session.commit()
-            return jsonify(_response(plan["speak"], status="ok", intent=intent))
+            return jsonify(_envelope(result, plan, routed, ai_info))
 
         prepare = PREPARE_TOOLS.get(intent)
         if prepare is not None:
             result = prepare(plan, ctx)
+            _remember_exchange(ctx, text, plan, result)
             db.session.commit()
-            return jsonify(result)
+            return jsonify(_envelope(result, plan, routed, ai_info))
 
         # Read-only path. It never mutates vault data.
         result = _handle_read(plan, ctx)
         _audit(plan.get("audit_tool") or "voice_read", "ok")
+        _remember_exchange(ctx, text, plan, result)
         db.session.commit()
-        result["intent"] = intent
-        result["tier"] = plan.get("tier")
-        return jsonify(result)
+        return jsonify(_envelope(result, plan, routed, ai_info))
 
     @bp.route("/voice/confirm", methods=["POST"])
     @login_required
     def voice_confirm():
         data, error = _get_request_json()
         if error:
-            return jsonify({"status": "error", "message": error}), 400
+            return jsonify({
+                "status": "error", "message": error, "error_code": "bad_request",
+            }), 400
         ctx = _get_context()
         if _rate_limited(ctx):
             _audit("voice_confirm", "rate_limited", "FAILED")
@@ -1018,17 +1268,20 @@ def create_voice_blueprint(share_creator):
             return jsonify(_response(
                 "I'm getting too many requests. Please wait a minute and try again.",
                 status="error",
+                error_code="rate_limited",
             )), 429
         result = _confirm_action(data.get("nonce"), share_creator)
         db.session.commit()
-        return jsonify(result)
+        return jsonify(_envelope(result, {"intent": "confirm", "tier": TIER_CONFIRM}))
 
     @bp.route("/voice/cancel", methods=["POST"])
     @login_required
     def voice_cancel():
         data, error = _get_request_json()
         if error:
-            return jsonify({"status": "error", "message": error}), 400
+            return jsonify({
+                "status": "error", "message": error, "error_code": "bad_request",
+            }), 400
         ctx = _get_context()
         if _rate_limited(ctx):
             _audit("voice_cancel", "rate_limited", "FAILED")
@@ -1036,7 +1289,8 @@ def create_voice_blueprint(share_creator):
             return jsonify(_response(
                 "I'm getting too many requests. Please wait a minute and try again.",
                 status="error",
+                error_code="rate_limited",
             )), 429
-        return jsonify(_cancel_pending(data.get("nonce")))
+        return jsonify(_envelope(_cancel_pending(data.get("nonce")), {"intent": "cancel"}))
 
     return bp

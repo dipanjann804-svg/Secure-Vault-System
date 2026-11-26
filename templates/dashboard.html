@@ -1367,6 +1367,38 @@
     margin:0; padding:0 16px 13px;
     font-size:10.5px; line-height:1.45; color:var(--muted);
   }
+  /* Explicit assistant states: idle, listening, processing, speaking,
+     awaiting confirmation, error. */
+  .voice-actions{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:0 16px 12px; background:var(--surface);
+  }
+  .voice-state{
+    font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
+    color:var(--muted); background:var(--surface-soft);
+    border:1px solid var(--border); border-radius:999px; padding:4px 9px;
+  }
+  .voice-panel[data-voice-state="LISTENING"] .voice-state{color:#fff; background:#DC2626; border-color:#DC2626;}
+  .voice-panel[data-voice-state="PROCESSING"] .voice-state{color:#fff; background:var(--purple); border-color:var(--purple);}
+  .voice-panel[data-voice-state="SPEAKING"] .voice-state{color:#fff; background:#0F766E; border-color:#0F766E;}
+  .voice-panel[data-voice-state="WAITING_FOR_CONFIRMATION"] .voice-state{color:#7C4A03; background:#FEF3C7; border-color:#F59E0B;}
+  html[data-theme="dark"] .voice-panel[data-voice-state="WAITING_FOR_CONFIRMATION"] .voice-state{background:#382B16; color:#FCD34D; border-color:#8A6420;}
+  .voice-panel[data-voice-state="ERROR"] .voice-state{color:#991B1B; background:#FEE2E2; border-color:#FCA5A5;}
+  html[data-theme="dark"] .voice-panel[data-voice-state="ERROR"] .voice-state{background:#3B2021; color:#FCA5A5; border-color:#7F1D1D;}
+  .voice-extra{
+    font-family:inherit; font-size:11.5px; font-weight:700;
+    color:var(--ink); background:var(--surface-soft);
+    border:1.5px solid var(--border); border-radius:999px;
+    padding:5px 10px; cursor:pointer;
+  }
+  .voice-extra:disabled{opacity:.45; cursor:default;}
+  .voice-extra:not(:disabled):hover{border-color:var(--purple); color:var(--purple);}
+  .voice-mic.processing{animation:voicePulse 1.2s infinite;}
+  .voice-mic.speaking{background:#0F766E; animation:voiceBreathe 1.6s ease-in-out infinite;}
+  @keyframes voiceBreathe{
+    0%,100%{box-shadow:0 0 0 0 rgba(15,118,110,.45);}
+    50%{box-shadow:0 0 0 9px rgba(15,118,110,0);}
+  }
   @keyframes voicePulse{
     0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.35);}
     50%{box-shadow:0 0 0 8px rgba(220,38,38,0);}
@@ -1801,7 +1833,7 @@
 <button type="button" class="voice-fab" id="voiceFab" aria-label="Open voice assistant" aria-expanded="false">
   <span aria-hidden="true">🎙</span> Voice
 </button>
-<div class="voice-panel" id="voicePanel" role="dialog" aria-modal="false" aria-label="Voice assistant" aria-hidden="true">
+<div class="voice-panel" id="voicePanel" role="dialog" aria-modal="false" aria-label="Voice assistant" aria-hidden="true" data-voice-state="IDLE">
   <div class="voice-head">
     <div>
       <strong>Voice assistant</strong>
@@ -1824,6 +1856,11 @@
       <span aria-hidden="true">🎙</span> <span id="voiceMicLabel">Tap to talk</span>
     </button>
     <span class="voice-status" id="voiceStatus">Ready. Microphone stays off until you tap.</span>
+  </div>
+  <div class="voice-actions">
+    <span class="voice-state" id="voiceState" data-state="IDLE" role="status" aria-live="polite">Idle</span>
+    <button type="button" class="voice-extra" id="voiceStopBtn" disabled>Stop speaking</button>
+    <button type="button" class="voice-extra" id="voiceRepeatBtn" disabled>Repeat</button>
   </div>
   <p class="voice-privacy">
     Your browser handles speech recognition and playback. The server receives only the recognized
