@@ -11,6 +11,26 @@ Secure Vault is a Flask web application for one signed-in owner's personal
 documents and notes. It is not a multi-tenant cloud drive and it has no public
 file listing. Everything is scoped to the account that signed in.
 
+## Getting started — how to use the app
+
+Register an account, then sign in with either your email or your username. The
+dashboard is the home screen: it lists your files by folder, has the **Add
+files** control, the Notepad, the voice panel, and the buttons for Settings,
+Manage shares and Trash.
+
+A normal first session looks like this: upload a file with **Add files** and
+pick or name a folder; write a note in the Notepad if you want a private
+encrypted note; save a recipient in Settings if you plan to share something;
+create a share link from the file and copy it while it is displayed, because it
+is only shown once; and use the search and folder controls on the dashboard to
+find things later. Deleting a file moves it to Trash, where it stays for 30
+days and can be restored from the interface.
+
+You can drive most of this by voice: tap the microphone and speak, for example
+"list my files", "open my passport", "search for invoice", "list my notes",
+"how much space am I using", or "share my passport with Rahul". The voice panel
+is microphone-only, records nothing, and shows the transcript of what it heard.
+
 ## Files and folders
 
 Files are uploaded from the dashboard with the **Add files** control. A single

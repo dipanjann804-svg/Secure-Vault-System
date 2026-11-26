@@ -41,6 +41,33 @@ class Chunk:
     tokens: frozenset
 
 
+# Generic asks ("how do I use this app", "how does it work") are made almost
+# entirely of stopwords, so plain token overlap finds nothing. These patterns
+# add the topic words the corpus actually uses. They only widen the search; the
+# answer is still generated from the retrieved text.
+_QUERY_HINTS = (
+    (
+        r"\b(get started|getting started|first time|new here|start using|use (this|the) app|"
+        r"(this|the) app works?|how (do|can|should) i use|what is (this|the) app|"
+        r"overview|walk ?through|what does (this|the) app do)\b",
+        "getting started dashboard files upload notes contacts sharing settings trash",
+    ),
+    (
+        r"\b(can (you|it) do|capabilit(?:y|ies)|what can i ask|commands|help me)\b",
+        "voice assistant capabilities",
+    ),
+    (
+        r"\b(sign ?in|log ?in|register|create an account|sign ?up)\b",
+        "accounts authentication",
+    ),
+)
+
+_HINT_RES = tuple((re.compile(pattern, re.IGNORECASE), terms) for pattern, terms in _QUERY_HINTS)
+
+# A section whose title names the topic is a better answer than a broad overview
+# that merely mentions the same words.
+TITLE_BOOST = 2.0
+
 _cache: dict = {"signature": None, "chunks": ()}
 
 
@@ -124,6 +151,9 @@ def retrieve(query: str, top_k: int = 4, min_score: float = 1.2) -> list[Chunk]:
     that appear in every section. Ties keep file order so results are stable.
     """
     terms = set(_tokenize(query))
+    for pattern, expansion in _HINT_RES:
+        if pattern.search(query or ""):
+            terms.update(_tokenize(expansion))
     if not terms:
         return []
     chunks = load_corpus()
@@ -136,10 +166,12 @@ def retrieve(query: str, top_k: int = 4, min_score: float = 1.2) -> list[Chunk]:
 
     scored = []
     for chunk in chunks:
+        title_terms = set(_tokenize(chunk.title))
         score = 0.0
         for term in terms:
             if term in chunk.tokens:
-                score += math.log(1 + total / (1 + document_frequency[term]))
+                weight = math.log(1 + total / (1 + document_frequency[term]))
+                score += weight * (TITLE_BOOST if term in title_terms else 1.0)
         if score > 0:
             scored.append((score, chunk))
     scored.sort(key=lambda item: item[0], reverse=True)

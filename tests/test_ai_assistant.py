@@ -636,6 +636,25 @@ def test_retrieval_returns_nothing_for_an_unrelated_query():
     assert knowledge_retriever.retrieve("zzzz qqqq") == []
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "how to use this app",
+        "how do I use this app",
+        "how does this app work",
+        "how do I get started",
+    ],
+)
+def test_generic_app_questions_find_the_getting_started_section(question):
+    titles = [chunk.title.lower() for chunk in knowledge_retriever.retrieve(question)]
+    assert any("getting started" in title for title in titles)
+
+
+def test_retrieval_prefers_the_section_named_after_the_topic():
+    first = knowledge_retriever.retrieve("what is the trash")[0]
+    assert first.title.strip().lower() == "trash"
+
+
 def test_settings_read_the_environment(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "abc")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
