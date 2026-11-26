@@ -531,6 +531,19 @@ def _check_blocked(low):
 # ---------------------------------------------------------------------------
 _FAQ_ENTRIES = (
     (
+        r"\b(?:how|where|can)\b.*\b(?:use|start|begin|set ?up)\b.*\b(?:app|site|vault|dashboard)\b"
+        r"|\bhow does (?:this|the) app work\b"
+        r"|\b(?:get|getting) started\b"
+        r"|\bwhat can this app do\b",
+        "Sign in, then use the dashboard: Add files uploads a document, "
+        "folders organise them, the Notepad holds encrypted notes, Settings "
+        "has your saved contacts and password, Manage shares has your links, "
+        "and Trash keeps deleted files for 30 days. You can also tap the "
+        "microphone and say: list my files, open my passport, or share my "
+        "passport with Rahul.",
+    ),
+
+    (
         r"\b(?:how|where|can)\b.*\b(?:upload|add|import)\b.*\b(?:files?|documents?|pdfs?)\b",
         "Tap Add files on the dashboard, choose a folder, and pick the file. "
         "Uploads happen in the interface only; I cannot take a file by voice.",

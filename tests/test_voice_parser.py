@@ -36,6 +36,18 @@ def test_help_is_read_only():
     assert plan["tier"] == TIER_READ
 
 
+def test_how_to_use_the_app_is_answered_locally():
+    for question in (
+        "how to use this app",
+        "how does this app work",
+        "how do I get started",
+        "what can this app do",
+    ):
+        plan = parse_voice_command(question)
+        assert plan["intent"] == "faq", question
+        assert "dashboard" in plan["speak"].lower(), question
+
+
 def test_list_documents():
     plan = parse_voice_command("list my files")
     assert plan["intent"] == "list_documents"

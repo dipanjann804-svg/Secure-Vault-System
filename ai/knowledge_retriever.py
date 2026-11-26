@@ -144,7 +144,7 @@ def load_corpus() -> tuple[Chunk, ...]:
     return _cache["chunks"]
 
 
-def retrieve(query: str, top_k: int = 4, min_score: float = 1.2) -> list[Chunk]:
+def retrieve(query: str, top_k: int = 5, min_score: float = 1.2) -> list[Chunk]:
     """Best-matching documentation chunks for a question.
 
     A light IDF weighting keeps rare terms (``trash``, ``csrf``) ahead of words
