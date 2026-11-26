@@ -291,15 +291,39 @@ _GREETING_RE = re.compile(
 )
 
 
-def _greeting_lead(clause):
+def _local_now():
+    """The server's local clock. Tests replace this to fix the hour."""
+    return datetime.now()
+
+
+def _part_of_day(hour):
+    """Which greeting fits this hour. Late night greets as evening."""
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    return "evening"
+
+
+_GREETING_WORDS = ("morning", "afternoon", "evening", "night")
+
+
+def _greeting_lead(clause, now=None):
+    """Greet back, correcting a greeting that does not match the clock.
+
+    "Good morning" at 12:30 is answered with the afternoon greeting and the
+    real time, because the clock on this server is the only authority.
+    """
     low = clause.lower()
-    if "morning" in low:
-        return "Good morning."
-    if "afternoon" in low:
-        return "Good afternoon."
-    if "evening" in low:
-        return "Good evening."
-    return "Hello."
+    spoken = next((word for word in _GREETING_WORDS if word in low), "")
+    if not spoken:
+        return "Hello."
+    now = now or _local_now()
+    part = _part_of_day(now.hour)
+    if part == spoken or _GREETING_WORDS.index(part) == _GREETING_WORDS.index(spoken):
+        return "Good %s." % spoken
+    clock = now.strftime("%I:%M %p").lstrip("0")
+    return "It's %s here, so good %s." % (clock, part)
 
 
 def _small_talk_reply(text):

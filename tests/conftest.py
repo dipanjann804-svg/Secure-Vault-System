@@ -214,6 +214,24 @@ def make_contact(app):
 
 
 @pytest.fixture(autouse=True)
+def _fixed_greeting_clock(monkeypatch):
+    """Greeting replies follow the wall clock, so pin it for determinism.
+
+    A test that cares about the hour patches ``voice_service._local_now``
+    again with its own clock and wins.
+    """
+    import voice_service
+
+    class _Clock:
+        hour = 9
+
+        def strftime(self, _format):
+            return "09:00 AM"
+
+    monkeypatch.setattr(voice_service, "_local_now", lambda: _Clock())
+
+
+@pytest.fixture(autouse=True)
 def _clear_rate_limiters(app):
     """The in-memory share limiters must not leak between tests."""
     import app as app_module

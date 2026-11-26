@@ -48,6 +48,36 @@ def test_how_to_use_the_app_is_answered_locally():
         assert "dashboard" in plan["speak"].lower(), question
 
 
+class _FakeClock:
+    def __init__(self, hour, label):
+        self.hour = hour
+        self._label = label
+
+    def strftime(self, _fmt):
+        return self._label
+
+
+def test_a_greeting_that_matches_the_clock_is_returned(monkeypatch):
+    monkeypatch.setattr(voice_service, "_local_now", lambda: _FakeClock(8, "08:15 AM"))
+    plan = parse_voice_command("good morning")
+    assert plan["intent"] == "small_talk"
+    assert plan["speak"].startswith("Good morning.")
+
+
+def test_a_wrong_greeting_is_corrected_with_the_real_time(monkeypatch):
+    monkeypatch.setattr(voice_service, "_local_now", lambda: _FakeClock(12, "12:05 PM"))
+    plan = parse_voice_command("good morning")
+    assert plan["intent"] == "small_talk"
+    assert "12:05 PM" in plan["speak"]
+    assert "good afternoon" in plan["speak"].lower()
+
+
+def test_good_evening_said_in_the_morning_is_corrected(monkeypatch):
+    monkeypatch.setattr(voice_service, "_local_now", lambda: _FakeClock(9, "09:00 AM"))
+    plan = parse_voice_command("good evening")
+    assert "good morning" in plan["speak"].lower()
+
+
 def test_list_documents():
     plan = parse_voice_command("list my files")
     assert plan["intent"] == "list_documents"

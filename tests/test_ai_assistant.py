@@ -404,6 +404,14 @@ def test_api_key_is_never_returned_in_a_response(login_as, install_ai):
     assert "test-key-not-real" not in response.get_data(as_text=True)
 
 
+def test_prompt_carries_the_server_clock_for_greeting_correction(login_as, install_ai):
+    provider = install_ai([_answer("GENERAL_KNOWLEDGE", "It is half past noon.")])
+    vault, _user = login_as()
+    vault.voice("good morning").get_json()
+    prompt = provider.calls[0]["prompt"]
+    assert "CURRENT LOCAL DATE AND TIME ON THIS SERVER" in prompt
+
+
 def test_state_reports_provider_status_without_credentials(login_as, install_ai):
     install_ai()
     vault, _user = login_as()

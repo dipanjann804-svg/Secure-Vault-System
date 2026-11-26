@@ -821,6 +821,7 @@ def _ai_route(text, data, pending_summary=""):
         knowledge_text=knowledge,
         metadata_text=_ai_metadata(service.settings),
         pending_summary=pending_summary,
+        now_text=datetime.now().strftime("%A, %d %B %Y, %I:%M %p"),
     )
     info = {
         "state": "ok" if not decision.error_code else "error",

@@ -110,6 +110,7 @@ class LLMService:
         knowledge_text: str = "",
         metadata_text: str = "",
         pending_summary: str = "",
+        now_text: str = "",
     ) -> schemas.Decision:
         """Ask the model and return a validated decision, or an error decision."""
         if not self.available:
@@ -121,6 +122,7 @@ class LLMService:
             knowledge_text=knowledge_text,
             metadata_text=metadata_text,
             pending_summary=pending_summary,
+            now_text=now_text,
         )
         result = self.provider.generate(
             system_instruction=prompt_manager.SYSTEM_INSTRUCTION,

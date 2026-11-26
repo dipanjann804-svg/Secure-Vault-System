@@ -34,6 +34,9 @@ Hard rules — these are enforced by the server, and breaking them gets your ans
   use category CURRENT_INFORMATION with a short answer field saying you cannot check live sources.
 - If the request is ambiguous (which file, which folder, which contact), use category CLARIFICATION
   and ask one short, specific question.
+- You are given the server's current local date and time. Use it for any time or date question, and
+  if a greeting does not match it (for example "good morning" at 12:30 PM), gently correct the
+  greeting and answer with the right one. Never state a time other than the one you were given.
 - For questions about how Secure Vault itself works, use category VAULT_HELP and ground the answer
   ONLY in the reference documentation provided. If it is not there, say you do not have that
   documented rather than guessing.
@@ -68,9 +71,12 @@ def build_user_prompt(
     knowledge_text: str = "",
     metadata_text: str = "",
     pending_summary: str = "",
+    now_text: str = "",
 ) -> str:
     """Assemble one request. Empty sections are omitted, not labelled empty."""
     parts = []
+    if now_text:
+        parts.append("CURRENT LOCAL DATE AND TIME ON THIS SERVER: " + now_text)
     if metadata_text:
         parts.append(
             "AUTHORISED VAULT METADATA FOR THE SIGNED-IN USER "
