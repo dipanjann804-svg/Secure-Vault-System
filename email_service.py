@@ -158,8 +158,9 @@ def _deliver_email(to_email: str, subject: str, html_content: str, text_content:
         print(f"[!] SendGrid API failed: {msg}. Falling back to SMTP if configured...")
 
     # 4. SMTP configuration (Gmail or custom SMTP)
-    mail_server = os.environ.get("MAIL_SERVER", "smtp.gmail.com").strip()
-    mail_port = int(os.environ.get("MAIL_PORT", 587))
+    mail_server = (os.environ.get("MAIL_SERVER") or "smtp.gmail.com").strip()
+    raw_port = (os.environ.get("MAIL_PORT") or "").strip()
+    mail_port = int(raw_port) if raw_port.isdigit() else 587
     mail_username = (os.environ.get("MAIL_USERNAME") or "").strip()
     mail_password = (os.environ.get("MAIL_PASSWORD") or "").replace(" ", "").strip()
 

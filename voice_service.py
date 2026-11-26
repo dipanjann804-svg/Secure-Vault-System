@@ -25,14 +25,23 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer environment variable, falling back to default if blank or invalid."""
+    raw = (os.environ.get(name) or "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
 VOICE_LANGUAGE = "en-US"
 VOICE_MAX_TRANSCRIPT = 600
 VOICE_MAX_NOTE_TITLE = 120
 VOICE_MAX_NOTE_CONTENT = 2000
-VOICE_PENDING_TTL_SECONDS = max(60, int(os.environ.get("VOICE_PENDING_TTL_SECONDS", "300")))
-VOICE_CONTEXT_TTL_SECONDS = max(300, int(os.environ.get("VOICE_CONTEXT_TTL_SECONDS", "1800")))
-VOICE_RATE_WINDOW_SECONDS = max(30, int(os.environ.get("VOICE_RATE_WINDOW_SECONDS", "60")))
-VOICE_RATE_LIMIT = max(3, int(os.environ.get("VOICE_RATE_LIMIT", "20")))
+VOICE_PENDING_TTL_SECONDS = max(60, _env_int("VOICE_PENDING_TTL_SECONDS", 300))
+VOICE_CONTEXT_TTL_SECONDS = max(300, _env_int("VOICE_CONTEXT_TTL_SECONDS", 1800))
+VOICE_RATE_WINDOW_SECONDS = max(30, _env_int("VOICE_RATE_WINDOW_SECONDS", 60))
+VOICE_RATE_LIMIT = max(3, _env_int("VOICE_RATE_LIMIT", 20))
 
 TIER_READ = 0
 TIER_CONFIRM = 1
