@@ -100,6 +100,24 @@ def test_general_question_is_answered_by_the_model(login_as, install_ai):
     assert provider.calls, "the model should have been called"
 
 
+def test_app_usage_question_goes_to_the_model_not_the_local_faq(login_as, install_ai):
+    # The local getting-started answer is only a fallback for when the model is
+    # unavailable; with a provider configured the conversational brain answers.
+    provider = install_ai([
+        _answer(
+            "VAULT_HELP",
+            "Sign in, then use the dashboard: Add files uploads a document.",
+        )
+    ])
+    vault, _user = login_as()
+    body = vault.voice("how to use this app").get_json()
+
+    assert provider.calls, "the model should be consulted, not the local FAQ"
+    assert body["ai"]["state"] == "ok"
+    assert body["request_category"] == "VAULT_HELP"
+    assert "Add files" in body["display"]
+
+
 def test_technical_question_gets_a_model_explanation(login_as, install_ai):
     install_ai([
         _answer(
