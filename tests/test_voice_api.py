@@ -152,6 +152,22 @@ def test_small_talk_is_answered(login_as):
     assert body["status"] == "ok"
 
 
+def test_math_question_is_answered(login_as):
+    vault, _user = login_as()
+    body = vault.voice("what is 12 times 7").get_json()
+    assert body["status"] == "ok"
+    assert body["intent"] == "general_answer"
+    assert "84" in body["speak"]
+
+
+def test_unanswerable_question_still_returns_a_response(login_as):
+    vault, _user = login_as()
+    body = vault.voice("what's the weather today").get_json()
+    assert body["status"] == "ok"
+    assert body["intent"] == "limit"
+    assert body["speak"].strip()
+
+
 def test_greeting_plus_how_are_you_gets_a_friendly_answer(login_as):
     vault, _user = login_as()
     body = vault.voice("Good morning. How are you?").get_json()

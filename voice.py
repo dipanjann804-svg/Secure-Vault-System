@@ -686,6 +686,9 @@ READ_TOOLS = {
     "small_talk": _tool_speak,
     "ask_note": _tool_speak,
     "error": _tool_speak,
+    "clarify": _tool_speak,
+    "limit": _tool_speak,
+    "general_answer": _tool_speak,
 }
 
 

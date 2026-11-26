@@ -19,7 +19,7 @@ A Flask web app for storing personal documents and notes securely. Files are org
 - **Encrypted notepad** — notes encrypted with Fernet (AES) before storage, decrypted on read; download as `.txt`, single + batch delete
 - **Expiring, protected share links** — revocable single-file or frozen-folder links with optional password gates, one-time/multi-use limits and access history
 - **Saved contacts** — owner-entered recipients for share links; voice can select them but never accepts a dictated email address
-- **Tap-to-talk voice assistant** — optional English (`en-US`) microphone panel. Read-only commands run immediately; note creation and sharing require confirmation; delete, password, upload and outbound-email actions are refused. No audio or full transcript is stored
+- **Tap-to-talk voice assistant** — optional English (`en-US`) microphone panel. Read-only commands run immediately; note creation and sharing require confirmation; delete, password, upload and outbound-email actions are refused. Every question gets an answer: vault tools first, then built-in app knowledge, then a computed answer (arithmetic, date and time), a clarifying question when the request is vague, or a plain statement of the limit — it never invents one. No audio or full transcript is stored
 - **Profile management** — name, phone, date of birth, gender, location, avatar upload
 - **Security logging** — login attempts and voice/share actions recorded with IP + user agent; voice audit rows never contain transcripts or note text
 - **CSRF protection** — every POST, including JSON `fetch()` calls, requires a Flask-WTF token
@@ -49,7 +49,7 @@ Secure-Vault-System/
 ├── app.py               # Flask app factory, all routes, startup (port 5555)
 ├── models.py            # User, Document, Note, Contact, ShareLink, VoiceContext, SecurityLog models
 ├── voice.py             # Voice API routes, tool handlers, pending-action state, audit + rate limiting
-├── voice_service.py     # Tool registry: each tool owns its phrasings and safety tier
+├── voice_service.py     # Tool registry (each tool owns its phrasings and safety tier) + answer ladder
 ├── encryption.py        # Fernet encrypt_note / decrypt_note helpers
 ├── email_service.py     # password-reset and share email sender (Resend / Brevo / SMTP)
 ├── config.py            # Config class (SECRET_KEY, DB, mail settings)

@@ -289,6 +289,63 @@ def test_create_note_without_body_asks_for_one():
     assert parse_voice_command("create a note")["intent"] == "ask_note"
 
 
+def test_arithmetic_is_computed_not_guessed():
+    plan = parse_voice_command("what is 12 times 7")
+    assert plan["intent"] == "general_answer"
+    assert "84" in plan["speak"]
+
+
+def test_arithmetic_respects_precedence():
+    assert "14" in parse_voice_command("what is 2 plus 3 times 4")["speak"]
+
+
+def test_division_by_zero_is_explained():
+    plan = parse_voice_command("what is 5 divided by 0")
+    assert plan["intent"] == "general_answer"
+    assert "zero" in plan["speak"].lower()
+
+
+def test_time_question_is_answered_locally():
+    plan = parse_voice_command("what time is it")
+    assert plan["intent"] == "general_answer"
+    assert re.search(r"\d", plan["speak"])
+
+
+def test_outside_world_questions_explain_the_limit():
+    for text in (
+        "what's the weather today",
+        "who won the match",
+        "translate hello to Spanish",
+        "what is the capital of France",
+    ):
+        plan = parse_voice_command(text)
+        assert plan["intent"] == "limit", text
+        assert "can't" in plan["speak"].lower(), text
+
+
+def test_vague_reference_asks_a_clarifying_question():
+    plan = parse_voice_command("the file")
+    assert plan["intent"] == "clarify"
+    assert "which file" in plan["speak"].lower()
+
+
+def test_bare_search_asks_for_a_term():
+    plan = parse_voice_command("search")
+    assert plan["intent"] == "clarify"
+    assert "?" in plan["speak"]
+
+
+def test_every_transcript_gets_a_spoken_answer():
+    # The point of the ladder: no input leaves the voice interface silent.
+    for text in (
+        "", "   ", "asdfgh qwerty", "make me a sandwich", "???", "please",
+        "\U0001f600", "the", "open", "it", "what", "do the thing",
+    ):
+        plan = parse_voice_command(text)
+        assert isinstance(plan.get("speak"), str), text
+        assert plan["speak"].strip(), text
+
+
 def _all_tools():
     groups = (
         voice_service._SMALL_TALK_TOOLS,
@@ -296,6 +353,9 @@ def _all_tools():
         voice_service._NAV_TOOLS,
         voice_service._ANSWER_TOOLS,
         voice_service._READ_TOOLS,
+        voice_service._CLARIFY_TOOLS,
+        voice_service._LIMIT_TOOLS,
+        voice_service._GENERAL_TOOLS,
         voice_service._FALLBACK_TOOLS,
     )
     return [tool for group in groups for tool in group]

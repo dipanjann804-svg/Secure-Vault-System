@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 VOICE_LANGUAGE = "en-US"
@@ -711,6 +712,205 @@ def _extract_share_options(text: str):
 
 
 # ---------------------------------------------------------------------------
+# The rungs below the vault tools: ask when the request is vague, admit the
+# limit when the answer needs something this app cannot see, and compute the
+# few general answers that are verifiable offline. None of these touches the
+# database and none of them invents a fact.
+# ---------------------------------------------------------------------------
+_CLARIFY_TOOLS = (
+    Tool(
+        "clarify", "voice_clarify",
+        "Which file do you mean? Say the name, for example: open passport dot pdf.",
+        patterns=(
+            r"^(?:it|that|this|that one|this one|the file|that file|this file|"
+            r"the document|that document|the thing|that thing)$",
+        ),
+    ),
+    Tool(
+        "clarify", "voice_clarify",
+        "What should I search for? Say find and a word from the name.",
+        patterns=(r"^(?:find|search|search for|look for|look up)$",),
+    ),
+    Tool(
+        "clarify", "voice_clarify",
+        "What would you like me to do? I can list or search files, open a file "
+        "or folder, create a note, or prepare a share.",
+        patterns=(r"^(?:do that|do something|what about that|and then)$",),
+    ),
+)
+
+_LIMIT_TOOLS = (
+    Tool(
+        "limit", "voice_limit",
+        "I can't check the weather: I have no internet access, so I only know "
+        "this vault. Ask me about your files, notes, contacts, or shares.",
+        patterns=(r"\b(?:weather|forecast|temperature|raining|rain|snow|humidity)\b",),
+    ),
+    Tool(
+        "limit", "voice_limit",
+        "I can't look up news, sports results, or prices. I have no internet "
+        "access, and I won't guess a number.",
+        patterns=(
+            r"\b(?:news|headlines?|stocks?|share price|exchange rate|bitcoin|"
+            r"crypto|currency|score|who won|the match|election|lottery)\b",
+        ),
+    ),
+    Tool(
+        "limit", "voice_limit",
+        "I can't translate or define words: I have no dictionary offline, and "
+        "I won't invent an answer.",
+        patterns=(
+            r"\b(?:translate|translation|define|definition|meaning of|spell|"
+            r"spelling|synonym|antonym)\b",
+        ),
+    ),
+    Tool(
+        "limit", "voice_limit",
+        "I can't answer questions about the world outside this vault, because "
+        "I can't check a source. I can tell you what is in your files, notes, "
+        "contacts, and shares.",
+        patterns=(
+            r"\b(?:capital of|population of|president|prime minister|"
+            r"how old is|when was .{1,40} born|history of|movie|film|song|"
+            r"recipe|joke|poem|homework)\b",
+        ),
+    ),
+)
+
+# Arithmetic and the clock are the only general answers that can be produced
+# offline without guessing, so they are the only ones offered.
+_MATH_WORDS = (
+    (r"\bmultiplied\s+by\b", "*"),
+    (r"\bdivided\s+by\b", "/"),
+    (r"\bplus\b", "+"),
+    (r"\bminus\b", "-"),
+    (r"\btimes\b", "*"),
+    (r"\bover\b", "/"),
+    (r"\band\b", "+"),
+    (r"[×x]", "*"),
+    (r"÷", "/"),
+)
+
+
+def _eval_math(expression):
+    """Evaluate simple arithmetic. No eval(); returns a float or None."""
+    text = expression.lower().replace(",", "")
+    for word, symbol in _MATH_WORDS:
+        text = re.sub(word, symbol, text)
+    if not re.search(r"\d", text):
+        return None
+    tokens = re.findall(r"\d*\.?\d+|[()+\-*/]", re.sub(r"[^0-9()+\-*/.]", " ", text))
+    if not tokens:
+        return None
+    index = 0
+
+    def peek():
+        return tokens[index] if index < len(tokens) else None
+
+    def take():
+        nonlocal index
+        token = tokens[index]
+        index += 1
+        return token
+
+    def parse_number():
+        sign = 1
+        while peek() in ("+", "-"):
+            if take() == "-":
+                sign = -sign
+        if peek() == "(":
+            take()
+            value = parse_sum()
+            if peek() != ")":
+                raise ValueError("unbalanced")
+            take()
+            return sign * value
+        token = peek()
+        if token is None or token in ("+", "-", "*", "/", "(", ")"):
+            raise ValueError("expected a number")
+        return sign * float(take())
+
+    def parse_product():
+        value = parse_number()
+        while peek() in ("*", "/"):
+            operator = take()
+            right = parse_number()
+            if operator == "*":
+                value *= right
+            elif right == 0:
+                raise ZeroDivisionError("zero")
+            else:
+                value /= right
+        return value
+
+    def parse_sum():
+        value = parse_product()
+        while peek() in ("+", "-"):
+            operator = take()
+            right = parse_product()
+            value = value + right if operator == "+" else value - right
+        return value
+
+    value = parse_sum()
+    if peek() is not None:
+        return None
+    return value
+
+
+def _build_math(match, _text):
+    try:
+        value = _eval_math(match.group("expr"))
+    except ZeroDivisionError:
+        return _plan(
+            "general_answer", TIER_READ, "voice_general_answer",
+            "I can't divide by zero. Try a different number.",
+        )
+    except ValueError:
+        return None
+    if value is None:
+        return None
+    if abs(value - round(value)) < 1e-9:
+        answer = f"{int(round(value)):,}"
+    else:
+        answer = f"{round(value, 6):,}"
+    return _plan(
+        "general_answer", TIER_READ, "voice_general_answer",
+        f"That is {answer}.",
+    )
+
+
+def _build_datetime(_match, _text):
+    now = datetime.now().astimezone()
+    clock = now.strftime("%I:%M %p").lstrip("0")
+    day = now.strftime("%A, %B %d, %Y").replace(" 0", " ")
+    return _plan(
+        "general_answer", TIER_READ, "voice_general_answer",
+        f"It is {clock} on {day}.",
+    )
+
+
+_GENERAL_TOOLS = (
+    Tool(
+        "general_answer", "voice_general_answer", "Let me work that out.",
+        patterns=(
+            r"^(?:what(?:'s| is) the (?:time|date)|what time is it|"
+            r"what day is (?:it|today)|what(?:'s| is) today'?s date|"
+            r"current (?:time|date))$",
+        ),
+        build=_build_datetime,
+    ),
+    Tool(
+        "general_answer", "voice_general_answer", "Let me work that out.",
+        patterns=(
+            r"^(?:what(?:'s| is)|whats|calculate|compute|how much is)\s+"
+            r"(?P<expr>.+)$",
+        ),
+        build=_build_math,
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Read tools. One tool understands every phrasing of the same question, so
 # "what files do I have", "list my files" and "show me my files" all land on
 # list_documents. Order is priority order.
@@ -901,26 +1101,48 @@ _FALLBACK_TOOLS = (
 )
 
 _EMPTY_SPEECH = "I didn't hear anything. Tap the microphone and try again."
-_LOST_SPEECH = "I didn't catch a command I know. Say help to hear what I can do."
-_UNKNOWN_SPEECH = (
-    "I'm not sure how to answer that. I can list or search files, open a file "
-    "or folder, tell you what is in a folder or where a file is, summarize "
-    "your vault, list notes, contacts, or shares, create a note, or prepare a "
-    "share. Say help for examples."
+_LOST_SPEECH = (
+    "I didn't catch a command I know. Name the file or folder you mean, or say "
+    "help to hear what I can do."
 )
+_UNANSWERED_SPEECH = (
+    "I can't answer that one. I only know this vault and my built-in commands, "
+    "and I won't guess. Ask me about your files, folders, notes, contacts, or "
+    "shares, or say help."
+)
+
+
+def _ensure_answer(plan):
+    """Guarantee a spoken answer: an empty plan becomes the honest fallback."""
+    if isinstance(plan, dict) and (plan.get("speak") or "").strip():
+        return plan
+    return _plan("unknown", TIER_READ, "voice_unknown", _UNANSWERED_SPEECH)
+
+
+def _fallback_plan(low):
+    """The last rung: explain what is missing instead of inventing an answer."""
+    if _QUESTION_START_RE.match(low) or low.endswith("?"):
+        return _plan("unknown", TIER_READ, "voice_unanswered", _UNANSWERED_SPEECH)
+    return _plan("unknown", TIER_READ, "voice_unknown", _LOST_SPEECH)
 
 
 def parse_voice_command(text: str):
     """Turn an English transcript into a plan without touching the database.
 
-    Database lookups and the final owner-scope checks happen in the route
-    layer. This function is intentionally side-effect free so it is easy to
-    test and audit.
+    Every transcript leaves with something to say: a vault tool, a known
+    answer, a computed general answer, a clarifying question, or an honest
+    statement of the limit. Database lookups and the final owner-scope checks
+    happen in the route layer, so this function stays side-effect free and
+    easy to test and audit.
     """
     original = normalize_transcript(text)
     if not original:
         return _plan("empty", TIER_READ, "voice_empty", _EMPTY_SPEECH)
+    return _ensure_answer(_plan_transcript(original))
 
+
+def _plan_transcript(original: str):
+    """The answer ladder: vault operation, knowledge, clarify, limit, fallback."""
     if _EMAIL_RE.search(original):
         return _blocked(
             "I can only share with a saved contact. I never accept an email "
@@ -958,6 +1180,12 @@ def parse_voice_command(text: str):
     if plan is not None:
         return plan
 
+    # A vague reference ("it", "that file") gets a question back rather than a
+    # guess at which file the user meant.
+    plan = _match_tools(_CLARIFY_TOOLS, low)
+    if plan is not None:
+        return plan
+
     # "How many ..." is a count, so it skips the how-to answers and reaches the
     # list tools.
     if not _COUNT_RE.match(low):
@@ -969,8 +1197,19 @@ def parse_voice_command(text: str):
     if plan is not None:
         return plan
 
+    # Not a vault operation: answer from what can be computed here (arithmetic
+    # and the clock) instead of guessing.
+    plan = _match_tools(_GENERAL_TOOLS, low)
+    if plan is not None:
+        return plan
+
+    # Needs the outside world: say so plainly. An honest limit is a response.
+    plan = _match_tools(_LIMIT_TOOLS, low)
+    if plan is not None:
+        return plan
+
     plan = _match_tools(_FALLBACK_TOOLS, low)
     if plan is not None:
         return plan
 
-    return _plan("unknown", TIER_READ, "voice_unknown", _UNKNOWN_SPEECH)
+    return _fallback_plan(low)
