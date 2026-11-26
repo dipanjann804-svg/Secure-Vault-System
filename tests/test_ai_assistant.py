@@ -666,3 +666,52 @@ def test_voice_context_row_is_used_for_memory(login_as, app):
         data = json.loads(ctx.context_json)
         assert data["turns"][0]["role"] == "user"
         assert "list my folders" in data["turns"][0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Latency: the provider asks for a short, non-reasoning answer
+def _provider_with_fake_client(behaviour):
+    provider = gemini_provider.GeminiProvider(api_key="test-key")
+
+    class _Models:
+        def __init__(self):
+            self.configs = []
+
+        def generate_content(self, *, model, contents, config):
+            self.configs.append(config)
+            outcome = behaviour(len(self.configs))
+            if isinstance(outcome, Exception):
+                raise outcome
+            return type("Response", (), {"text": outcome})()
+
+    models = _Models()
+    provider._client = type("Client", (), {"models": models})()
+    return provider, models
+
+
+def test_provider_requests_a_capped_answer_without_deep_thinking():
+    provider, models = _provider_with_fake_client(
+        lambda _call: '{"category": "GENERAL_KNOWLEDGE", "answer": "hi"}'
+    )
+    result = provider.generate(system_instruction="s", user_prompt="p")
+
+    assert result.ok is True
+    config = models.configs[0]
+    assert config.max_output_tokens == gemini_provider.DEFAULT_MAX_OUTPUT_TOKENS
+    level = config.thinking_config.thinking_level
+    assert getattr(level, "value", str(level)).lower() == gemini_provider.THINKING_LEVEL
+
+
+def test_provider_retries_without_the_thinking_setting_if_the_model_rejects_it():
+    def behaviour(call):
+        if call == 1:
+            return RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported")
+        return '{"category": "GENERAL_KNOWLEDGE", "answer": "hi"}'
+
+    provider, models = _provider_with_fake_client(behaviour)
+    result = provider.generate(system_instruction="s", user_prompt="p")
+
+    assert result.ok is True
+    assert len(models.configs) == 2
+    assert provider._thinking is False
+    assert getattr(models.configs[1], "thinking_config", None) is None

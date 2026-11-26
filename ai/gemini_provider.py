@@ -28,11 +28,52 @@ from ai.provider_base import (
 )
 
 DEFAULT_MODEL = "gemini-3.8-flash"
-DEFAULT_TIMEOUT = 20.0
-DEFAULT_MAX_RETRIES = 2
+DEFAULT_TIMEOUT = 10.0
+DEFAULT_MAX_RETRIES = 1
+# A spoken answer is a couple of sentences. Capping generation keeps the turn
+# short instead of letting the model write an essay nobody asked to hear.
+DEFAULT_MAX_OUTPUT_TOKENS = 800
+
+# Voice turns are short and user-facing, so the cheapest reasoning setting the
+# model supports is requested. On a reasoning model the default ("think as long
+# as you like") is the largest single source of latency: two sentences of speech
+# can spend several seconds in thinking before the first token is produced.
+THINKING_LEVEL = "low"
 
 # Codes worth a second attempt. A bad key or an unknown model is not retried.
 RETRYABLE = {ERROR_TIMEOUT, ERROR_RATE_LIMITED, ERROR_UNAVAILABLE, ERROR_GENERIC}
+
+
+def _thinking_kwargs(types, model: str) -> dict:
+    """Fastest supported reasoning setting, feature-detected on the SDK.
+
+    Gemini 3 models take ``thinking_level``; earlier reasoning models take a
+    ``thinking_budget`` that can be zeroed. If neither field exists this is a
+    no-op and the request is sent unchanged.
+    """
+    config = getattr(types, "ThinkingConfig", None)
+    if config is None:
+        return {}
+    fields = getattr(config, "model_fields", {})
+    if model.lower().startswith("gemini-3") and "thinking_level" in fields:
+        return {"thinking_config": config(thinking_level=THINKING_LEVEL)}
+    if "thinking_budget" in fields:
+        return {"thinking_config": config(thinking_budget=0)}
+    return {}
+
+
+def _thinking_rejected(exc: BaseException) -> bool:
+    """True when the API refused the thinking setting itself."""
+    text = (str(exc) or "").lower()
+    if "thinking" not in text:
+        return False
+    status = getattr(exc, "code", None)
+    return (
+        status == 400
+        or "invalid" in text
+        or "unsupported" in text
+        or "not supported" in text
+    )
 
 
 def classify_exception(exc: BaseException) -> str:
@@ -90,14 +131,18 @@ class GeminiProvider(LLMProvider):
         model: str = DEFAULT_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         sleep=time.sleep,
     ):
         self._api_key = (api_key or "").strip()
         self.model = (model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.timeout = max(1.0, float(timeout or DEFAULT_TIMEOUT))
         self.max_retries = max(0, int(max_retries))
+        self.max_output_tokens = max(64, int(max_output_tokens))
         self._sleep = sleep
         self._client = None
+        # Cleared for good if the API rejects the thinking setting.
+        self._thinking = True
 
     def available(self) -> bool:
         return bool(self._api_key)
@@ -130,9 +175,9 @@ class GeminiProvider(LLMProvider):
             return LLMResult(False, error_code=ERROR_MISSING_KEY)
 
         started = time.monotonic()
-        last = LLMResult(False, error_code=ERROR_GENERIC)
+        attempt = 0
 
-        for attempt in range(self.max_retries + 1):
+        while True:
             try:
                 from google.genai import types
 
@@ -140,7 +185,10 @@ class GeminiProvider(LLMProvider):
                     "system_instruction": system_instruction,
                     "temperature": temperature,
                     "response_mime_type": "application/json",
+                    "max_output_tokens": self.max_output_tokens,
                 }
+                if self._thinking:
+                    config_kwargs.update(_thinking_kwargs(types, self.model))
                 # Feature-detect the raw JSON-schema field so the provider still
                 # works on older SDK builds.
                 if response_schema and "response_json_schema" in getattr(
@@ -168,8 +216,14 @@ class GeminiProvider(LLMProvider):
                     error_detail=_safe_detail(exc, self._api_key),
                     latency_ms=elapsed,
                 )
+                if self._thinking and _thinking_rejected(exc):
+                    # The model or key does not accept this reasoning setting.
+                    # Retry at once with the plain config rather than failing a
+                    # turn the model could have answered.
+                    self._thinking = False
+                    continue
                 if code not in RETRYABLE or attempt >= self.max_retries:
-                    break
+                    return last
+                attempt += 1
                 # Small linear backoff; the request is already user-facing.
-                self._sleep(0.4 * (attempt + 1))
-        return last
+                self._sleep(0.4 * attempt)

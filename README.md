@@ -167,9 +167,9 @@ python -m pytest tests -q
 | `VOICE_AI_METADATA` | No | Vault metadata sent to Gemini: `names` (default), `counts`, or `none` |
 | `GEMINI_API_KEY` | For general answers | Google Gemini API key. Without it the assistant answers vault commands only |
 | `GEMINI_MODEL` | No | Gemini model id (default `gemini-3.8-flash`) |
-| `GEMINI_TIMEOUT` | No | Per-request timeout in seconds (default `20`, range 3–60) |
+| `GEMINI_TIMEOUT` | No | Per-request timeout in seconds (default `10`, range 3–60) |
 | `GEMINI_ENABLED` | No | `false` disables every model call (default `true`) |
-| `GEMINI_MAX_RETRIES` | No | Retries for transient failures (default `2`, maximum `4`) |
+| `GEMINI_MAX_RETRIES` | No | Retries for transient failures (default `1`, maximum `4`) |
 
 Speech recognition and playback stay in the browser; the server receives recognized text only. A Gemini key is optional: without one, every vault command still works and general questions get an honest "I can't answer that" instead of a guess.
 
@@ -404,7 +404,8 @@ pip install -r requirements.txt      # adds google-genai
 # Put your key in .env (never commit it):
 #   GEMINI_API_KEY=your_api_key
 #   GEMINI_MODEL=gemini-3.8-flash
-#   GEMINI_TIMEOUT=20
+#   GEMINI_TIMEOUT=10
+#   GEMINI_MAX_RETRIES=1
 #   GEMINI_ENABLED=true
 python app.py
 ```
